@@ -68,6 +68,19 @@ class Edge:
          raise ValueError(f"Edge {self.src} -> {self.dst}: risk must be in [0, 1].")
       if self.cap < 0:
          raise ValueError(f"Edge {self.src} -> {self.dst}: capacity must be >= 0.")
+      
+   def effective_cost(self, risk_aversion: float) -> float:
+      """Composite edge weight: a linear blend of transit cost and risk.
+
+      effective = cost + risk_aversion * risk
+
+      `risk_aversion` (lambda) is the single dial that trades throughput
+      cost against threat exposure. lambda = 0 routes purely on cost; large
+      lambda routes purely on safety. See the README for why I keep this
+      *additive* (and linear in flow) rather than using a multiplicative
+      survival model.
+      """
+      return self.cost + risk_aversion * self.risk
 
 
 @dataclass
@@ -77,7 +90,7 @@ class Network:
 
    # ---- construction helpers -------------------------------------------
    def add_node(self, node: Node) -> None:
-      if node in self.nodes:
+      if node.id in self.nodes:
             raise ValueError(f"Duplicate node id: {node.id}")
       self.nodes[node.id] = node
 
