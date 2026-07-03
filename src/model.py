@@ -1,7 +1,7 @@
 """Domain model for contested-logistics routing.
 
-The model is intentionally small and explicit. A 'Network' is a directed graph
-of 'Node's and 'Edge's. Supply nodes hold inventory, demand nodes need it, and
+The model is intentionally small and explicit. A `Network` is a directed graph
+of `Node`s and `Edge`s. Supply nodes hold inventory, demand nodes need it, and
 transshipment nodes are pure routing junctions. Every edge carries three numbers:
 
     cost  -- a generalized transit cost (time, fuel, lift hours -- your choice of
@@ -12,7 +12,7 @@ transshipment nodes are pure routing junctions. Every edge carries three numbers
              short tons). This makes the problem an *allocation* problem
              rather than a shortest-path problem.
 
-A 'Disruption' mutates a network (a strait gets mined, a node gets struck), which
+A `Disruption` mutates a network (a strait gets mined, a node gets struck), which
 lets us re-solve the same theater under different threat pictures and compare."
 
 """
@@ -134,7 +134,7 @@ class Disruption:
          self.kind = DisruptionKind(self.kind)
 
    def apply(self, net: Network) -> None:
-      """Mutate 'net' in place. Operate on a copy if you want to keep the original."""
+      """Mutate `net` in place. Operate on a copy if you want to keep the original."""
       k = self.kind
       if k is DisruptionKind.REMOVE_NODE:
          for e in net.edges:
@@ -165,7 +165,7 @@ class Scenario:
    def under(self, threat: Optional[str]) -> Network:
       """Return a fresh network with the named threat picture applied.
 
-      'threat=None' returns the undisrupted baseline
+      `threat=None` returns the undisrupted baseline
       """
       net = self.network.copy()
       if threat is None:

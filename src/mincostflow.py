@@ -54,8 +54,8 @@ class _Arc:
 class MinCostFlow:
    """Integer-indexed min-cost flow solver.
 
-   Build the graph with 'add_edge', then call 'solve'. Arcs are stored in
-   consecutive pairs (forward, residual) so the residual of arc 'i' is 'i ^ 1'.
+   Build the graph with `add_edge`, then call `solve`. Arcs are stored in
+   consecutive pairs (forward, residual) so the residual of arc `i` is `i ^ 1`.
    """
 
    def __init__(self, num_nodes: int) -> None:
@@ -80,21 +80,21 @@ class MinCostFlow:
       return len(self._forward_index) - 1
 
    def flow_on(self, handle: int) -> float:
-      """How much flow ended up on the forward arc identiifed by 'handle'."""
+      """How much flow ended up on the forward arc identiifed by `handle`."""
       fwd = self._forward_index[handle]
       # flow pushed forward equals capcity that migrated to the residual arc
       return self.arcs[fwd ^ 1].cap
    
    def solve(self, source: int, sink: int, max_flow: float = INF) -> Tuple[float, float]:
-      """Push up to 'max_flow' units from source to sink at minimum cost.
+      """Push up to `max_flow` units from source to sink at minimum cost.
 
-      Returns (flow_shipped, total_cost). If 'max_flow' is INF this is a
+      Returns (flow_shipped, total_cost). If `max_flow` is INF this is a
       min-cost *max*-flow.
       """
       n = self.n
       h = [0.0] * n # Johnson potentials; zero is valid since costs >= 0.
       # If you ever add negative-cost arcs before the first solve, initialize
-      # 'h' with a Bellman-Ford pass from 'source' here.
+      # `h` with a Bellman-Ford pass from `source` here.
 
       total_flow = 0.0
       total_cost = 0.0
@@ -137,7 +137,7 @@ class MinCostFlow:
          push = max_flow - total_flow
          v = sink
          while  v!= source:
-            push = min(push, self.arcs[prev_arc[v].cap])
+            push = min(push, self.arcs[prev_arc[v]].cap)
             v = prev_node[v]
 
          # Augment
