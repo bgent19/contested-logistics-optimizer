@@ -2,8 +2,8 @@
 
 import math
 
-from src.model import Edge, Network, Node, NodeKind
-from src.routing import cheapest_path, safest_path
+from clopt.model import Edge, Network, Node, NodeKind
+from clopt.routing import cheapest_path, safest_path
 
 
 def _two_route_net():

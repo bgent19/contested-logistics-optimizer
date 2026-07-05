@@ -6,7 +6,7 @@ vague property failure. The rest assert the structural invariants any correct
 flow must satisfy.
 """
 
-from src.mincostflow import MinCostFlow
+from clopt.mincostflow import MinCostFlow
 
 
 def _diamond():

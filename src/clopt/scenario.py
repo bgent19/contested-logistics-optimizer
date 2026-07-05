@@ -8,7 +8,7 @@ import json
 from typing import Any, Dict
 from unicodedata import name
 
-from model import Disruption, Edge, Network, Node, Scenario
+from clopt.model import Disruption, Edge, Network, Node, Scenario
 
 
 

@@ -1,0 +1,44 @@
+{
+  "name": "Archipelago Resupply (sample)",
+  "description": "A fictional island-resupply theater. Two rear logistics hubs must sustain three forward operating bases across contested sea lanes. A cheap chokepoint (STRAIT-3) is fast but dangerous; an airhead and longer ocean lanes are safe but costly and capacity-limited. All node designators and numbers are invented to illustrate the model.",
+  "network": {
+    "nodes": [
+      { "id": "HUB-ALPHA",  "kind": "supply",    "quantity": 120, "label": "Rear logistics hub (primary)" },
+      { "id": "HUB-BRAVO",  "kind": "supply",    "quantity": 60,  "label": "Forward port (secondary stock)" },
+      { "id": "LANE-J1",    "kind": "transit", "label": "Open-ocean lane junction" },
+      { "id": "LANE-J2",    "kind": "transit", "label": "Inner-sea lane junction" },
+      { "id": "STRAIT-3",   "kind": "transit", "label": "Contested strait chokepoint" },
+      { "id": "AIRHEAD-7",  "kind": "transit", "label": "Intermediate airhead" },
+      { "id": "FOB-KILO",   "kind": "demand",    "quantity": 70, "label": "Island base (high demand)" },
+      { "id": "FOB-LIMA",   "kind": "demand",    "quantity": 50, "label": "Island base (mid)" },
+      { "id": "FOB-MIKE",   "kind": "demand",    "quantity": 40, "label": "Most-forward base" }
+    ],
+    "edges": [
+      { "src": "HUB-ALPHA", "dst": "LANE-J1",   "cap": 120, "cost": 4, "risk": 0.05 },
+      { "src": "HUB-ALPHA", "dst": "STRAIT-3",  "cap": 80,  "cost": 2, "risk": 0.45 },
+      { "src": "HUB-BRAVO", "dst": "LANE-J2",   "cap": 60,  "cost": 3, "risk": 0.15 },
+      { "src": "LANE-J1",   "dst": "LANE-J2",   "cap": 90,  "cost": 3, "risk": 0.10, "bidirectional": true },
+      { "src": "LANE-J1",   "dst": "AIRHEAD-7", "cap": 40,  "cost": 6, "risk": 0.05 },
+      { "src": "LANE-J1",   "dst": "FOB-KILO",  "cap": 60,  "cost": 6, "risk": 0.08 },
+      { "src": "STRAIT-3",  "dst": "FOB-KILO",  "cap": 80,  "cost": 2, "risk": 0.40 },
+      { "src": "LANE-J2",   "dst": "FOB-KILO",  "cap": 50,  "cost": 4, "risk": 0.12 },
+      { "src": "LANE-J2",   "dst": "FOB-LIMA",  "cap": 50,  "cost": 5, "risk": 0.18 },
+      { "src": "LANE-J2",   "dst": "FOB-MIKE",  "cap": 30,  "cost": 7, "risk": 0.30 },
+      { "src": "AIRHEAD-7", "dst": "FOB-LIMA",  "cap": 25,  "cost": 8, "risk": 0.03 },
+      { "src": "AIRHEAD-7", "dst": "FOB-MIKE",  "cap": 25,  "cost": 9, "risk": 0.04 }
+    ]
+  },
+  "threat_pictures": {
+    "strait_mined": [
+      { "kind": "remove_edge", "src": "HUB-ALPHA", "dst": "STRAIT-3", "note": "Strait approach mined; hub can no longer feed the chokepoint." },
+      { "kind": "remove_edge", "src": "STRAIT-3", "dst": "FOB-KILO", "note": "Chokepoint-to-KILO leg interdicted." }
+    ],
+    "bravo_struck": [
+      { "kind": "remove_node", "node": "HUB-BRAVO", "note": "Forward port struck; its 60 units of stock are lost to the plan." }
+    ],
+    "j2_pressure": [
+      { "kind": "scale_capacity", "src": "LANE-J1", "dst": "LANE-J2", "factor": 0.4, "note": "Inner-sea lane harassed; lateral capacity cut 60%." },
+      { "kind": "scale_risk", "src": "LANE-J2", "dst": "FOB-MIKE", "factor": 1.5, "note": "Approach to MIKE more dangerous." }
+    ]
+  }
+}

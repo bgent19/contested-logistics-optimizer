@@ -151,7 +151,7 @@ class Disruption:
       k = self.kind
       if k is DisruptionKind.REMOVE_NODE:
          for e in net.edges:
-            if e.source == self.node or e.dst == self.node:
+            if e.src == self.node or e.dst == self.node:
                e.cap = 0
          return
       # edge-targeted disruptions

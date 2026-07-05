@@ -22,8 +22,8 @@ integral. Convenient when "units" are indivisible (pallets, containers).
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
-from mincostflow import MinCostFlow
-from model import Network, NodeKind
+from clopt.mincostflow import MinCostFlow
+from clopt.model import Network, NodeKind
 
 
 @dataclass
@@ -81,7 +81,7 @@ def solve_allocation(net: Network, risk_aversion: float) -> AllocationResult:
    delivered, _blended = mcf.solve(S, T)
 
    legs: List[LegFlow] = []
-   tansit_cost = 0.0
+   transit_cost = 0.0
    risk_exposure = 0.0
    blended = 0.0
    for h, src, dst, cost, risk in handles:
