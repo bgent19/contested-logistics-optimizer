@@ -177,7 +177,6 @@ src/clopt/
   solver.py       # build flow from a Network, decompose cost/risk, Pareto sweep
   scenario.py     # JSON load/save + validation
   cli.py          # argparse CLI
-  api.py          # FastAPI app
 data/
   theater_sample.json   # synthetic-but-plausible scenario + threat pictures
 tests/
