@@ -13,9 +13,10 @@ import argparse
 import json
 import sys
 
+from .routing import cheapest_path, safest_path
+from .scenario import load_scenario
 from .solver import solve_allocation
 
-from .scenario import load_scenario
 
 
 def _load(args) -> "tuple":
@@ -85,7 +86,26 @@ def cmd_allocate(args) -> int:
 
 def cmd_route(args) -> int:
    _, net = _load(args)
-   # Implementation for route command
+   if args.safest:
+      r = safest_path(net, args.src, args.dst)
+      mode = "safest (max survival)"
+   else:
+      r = cheapest_path(net, args.src, args.dst, risk_aversion=args.risk_aversion)
+      mode = f"cheapest (lambda={args.risk_aversion:g})"
+   if args.json:
+      print(json.dumps({
+         "mode": mode, "found": r.found, "path": r.path,
+         "total_cost": r.total_cost, "total_effective_cost": r.total_effective,
+         "survival": r.survival, "hops": r.hops,
+      }, indent=2))
+      return 0 if r.found else 1
+   if not r.found:
+      print(f"No path from {args.src} to {args.dst} under current conditions.")
+      return 1
+   print(f"Mode: {mode}")
+   print(f"Path: {'->'.join(r.path)} ({r.hops} hops)")
+   print(f"Transit cost: {r.total_cost:g}")
+   print(f"Survival probability: {r.survival * 100:.1f}%")
    return 0
 
 
@@ -115,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
    sp = sub.add_parser("allocate", help="Solve theater-wide resupply allocation.")
    add_common(sp)
    sp.add_argument("--risk-aversion", "--lambda", dest="risk_aversion",
-                   type=float, default=0.0, help="Risk.cost trade dial (lambda)")
+                   type=float, default=0.0, help="Risk/cost trade dial (lambda)")
    sp.set_defaults(func=cmd_allocate)
 
    sp = sub.add_parser("route", help="Best single path between two nodes.")
