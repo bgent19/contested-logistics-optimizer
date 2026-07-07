@@ -9,6 +9,8 @@ Examples
     clopt sweep       --data data/theater_sample.json --lambdas 0,1,5,25,100
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import sys
@@ -17,7 +19,6 @@ from typing import List
 from .routing import cheapest_path, safest_path
 from .scenario import load_scenario
 from .solver import pareto_sweep, solve_allocation
-
 
 
 def _load(args) -> "tuple":
@@ -78,12 +79,12 @@ def cmd_info(args) -> int:
    return 0
 
 
-
 def cmd_allocate(args) -> int:
    _, net = _load(args)
    res = solve_allocation(net, risk_aversion=args.risk_aversion)
    _print_allocation(res, args.json)
    return 0
+
 
 def cmd_route(args) -> int:
    _, net = _load(args)
@@ -130,6 +131,7 @@ def cmd_sweep(args) -> int:
          "exposure at higher transit cost.")
    return 0
 
+
 def build_parser() -> argparse.ArgumentParser:
    p = argparse.ArgumentParser(
       prog="clopt",
@@ -173,13 +175,19 @@ def build_parser() -> argparse.ArgumentParser:
    return p
 
 
-
-
-
 def main(argv=None) -> int:
    parser = build_parser()
    args = parser.parse_args(argv)
-   return args.func(args)
+   try:
+      return args.func(args)
+   except BrokenPipeError:
+        # Output was piped into something that closed early (e.g. `| head`).
+        # Exit silently instead of dumping a traceback.
+      try:
+         sys.stdout.close()
+      except Exception:
+         pass
+      return 0 
 
 
 if __name__ == "__main__":
