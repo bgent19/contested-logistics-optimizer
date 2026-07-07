@@ -12,10 +12,11 @@ Examples
 import argparse
 import json
 import sys
+from typing import List
 
 from .routing import cheapest_path, safest_path
 from .scenario import load_scenario
-from .solver import solve_allocation
+from .solver import pareto_sweep, solve_allocation
 
 
 
@@ -111,7 +112,22 @@ def cmd_route(args) -> int:
 
 def cmd_sweep(args) -> int:
    _, net = _load(args)
-   # Implementation for sweep command
+   lambdas: List[float] = [float(x) for x in args.lambdas.split(",")]
+   results = pareto_sweep(net, lambdas)
+   if args.json:
+      print(json.dumps([
+         {"risk_aversion": r.risk_aversion, "fill_rate": r.fill_rate,
+         "transit_cost": r.transit_cost, "risk_exposure": r.risk_exposure}
+         for r in results
+      ], indent=2))
+      return 0
+   print("Cost / risk frontier (each row is one plan):\n")
+   print(f"  {'lambda':>8}{'fill %':>9}{'transit cost':>15}{'risk exposure':>16}")
+   for r in results:
+      print(f"  {r.risk_aversion:>8g}{r.fill_rate * 100:>8.1f}%"
+            f"{r.transit_cost:>15.2f}{r.risk_exposure:>16.2f}")
+   print("\nRead it as an exchange rate: moving down the table buys lower risk "
+         "exposure at higher transit cost.")
    return 0
 
 def build_parser() -> argparse.ArgumentParser:
