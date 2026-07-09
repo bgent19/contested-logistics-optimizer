@@ -1,0 +1,7 @@
+# Core algorithm + CLI need nothing beyond the Python standard library.
+# These extras power the REST API and the test suite.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2
+pytest>=8
+httpx>=0.27

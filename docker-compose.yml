@@ -1,0 +1,10 @@
+services:
+  optimizer:
+    build: .
+    image: clopt:latest
+    ports:
+      - "8000:8000"
+    environment:
+      CLOPT_DATA: data/theater_sample.json
+    # `docker compose up` builds, runs the tests, then serves the API at
+    # http://localhost:8000/docs

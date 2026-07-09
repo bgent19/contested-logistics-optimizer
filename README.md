@@ -36,6 +36,27 @@ tunable risk posture all fall out of one model.
 
 ---
 
+## Quick start
+ 
+No dependencies beyond the standard library are needed for the core and CLI.
+ 
+```bash
+# Option A: Docker (builds, runs the tests, then serves the API)
+docker compose up            # then open http://localhost:8000/docs
+ 
+# Option B: Make
+make install                 # editable install with API + test extras
+make test                    # run the suite
+make run                     # baseline allocation on the sample theater
+make demo                    # guided tour: baseline, risk-averse, sweep, disruption
+make api                     # serve REST API at http://localhost:8000/docs
+ 
+# Option C: nothing installed, just Python
+PYTHONPATH=src python3 -m clopt.cli allocate --data data/theater_sample.json
+```
+ 
+---
+
 ## The model
 
 A `Network` is a directed graph. Every node is a **supply** point (has stock), a
@@ -177,6 +198,7 @@ src/clopt/
   solver.py       # build flow from a Network, decompose cost/risk, Pareto sweep
   scenario.py     # JSON load/save + validation
   cli.py          # argparse CLI
+  api.py          # FastAPI app
 data/
   theater_sample.json   # synthetic-but-plausible scenario + threat pictures
 tests/
@@ -184,6 +206,17 @@ tests/
   test_routing.py       # cheapest vs safest path behavior
   test_solver.py        # end-to-end fill/cost/risk + disruptions + Pareto monotonicity
 ```
+
+## Testing
+
+```bash
+make test        # or: PYTHONPATH=src python3 -m pytest -q
+```
+
+The suite checks the algorithm against **hand-computed** min-cost-flow optima
+(so a regression is a concrete wrong number), verifies flow conservation and
+capacity invariants, and asserts the model's headline promise: as `λ` rises,
+risk exposure never increases and cost never falls (a monotone Pareto frontier).
 
 ## License
 
