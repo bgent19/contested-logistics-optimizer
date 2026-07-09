@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from .routing import cheapest_path, safest_path
 from .scenario import Scenario, load_scenario
-from .solver import solve_allocation
+from .solver import solve_allocation, pareto_sweep
 
 DATA_PATH = os.environ.get("CLOPT_DATA", "data/theater_sample.json")
 
@@ -71,7 +71,7 @@ class AllocationResponse(BaseModel):
 class RouteResponse(BaseModel):
    found: bool
    mode: str
-   path: List[Leg]
+   path: List[str]
    hops: int
    total_cost: float
    survival: float
@@ -97,8 +97,8 @@ def scenario() -> dict:
    return {
       "name": sc.name,
       "description": sc.description,
-      "nodes": len(net.nodes()),
-      "edges": len(net.edges()),
+      "nodes": len(net.nodes),
+      "edges": len(net.edges),
       "total_supply": net.total_supply(),
       "total_demand": net.total_demand(),
       "threat_pictures": sorted(sc.threat_pictures),
@@ -133,7 +133,7 @@ def route(
    threat: Optional[str] = Query(None),
 ) -> RouteResponse:
    net = _net_for(threat)
-   if src not in net.nodes() or dst not in net.nodes():
+   if src not in net.nodes or dst not in net.nodes:
       raise HTTPException(status_code=404, detail="Unknown node id.")
    if safest:
       r = safest_path(net, src, dst)
