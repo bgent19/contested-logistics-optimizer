@@ -17,8 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
-from clopt.maxflow import EdmondsKarp
-from clopt.model import Network, NodeKind
+from .maxflow import EdmondsKarp
+from .model import Network, NodeKind
 
 _BIG = float("inf")
 
