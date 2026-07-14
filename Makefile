@@ -32,6 +32,10 @@ demo:
 	PYTHONPATH=src $(PYTHON) -m clopt.cli allocate --data $(DATA) --risk-aversion 25
 	@echo "\n== Cost/risk frontier =="
 	PYTHONPATH=src $(PYTHON) -m clopt.cli sweep --data $(DATA)
+	@echo "\n== Max throughput + min-cut certificate (Days 2-3) =="
+	PYTHONPATH=src $(PYTHON) -m clopt.cli maxflow --data $(DATA)
+	@echo "\n== Budget interdiction, k=2 (Day 4, NP-hard) =="
+	PYTHONPATH=src $(PYTHON) -m clopt.cli interdict --data $(DATA) --budget 2
 	@echo "\n== Under 'strait_mined' threat picture =="
 	PYTHONPATH=src $(PYTHON) -m clopt.cli allocate --data $(DATA) --threat strait_mined
 

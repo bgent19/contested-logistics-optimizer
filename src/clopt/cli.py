@@ -19,6 +19,8 @@ from typing import List
 from .routing import cheapest_path, safest_path
 from .scenario import load_scenario
 from .solver import pareto_sweep, solve_allocation
+from .throughput import max_flow_min_cut
+from .interdiction import budget_interdiction, min_cut_interdiction
 
 
 def _load(args) -> "tuple":
@@ -132,6 +134,103 @@ def cmd_sweep(args) -> int:
    return 0
 
 
+def cmd_maxflow(args) -> int:
+   _, net = _load(args)
+   res = max_flow_min_cut(net, trace=getattr(args, "trace", False))
+   if args.json:
+      print(json.dumps({
+         "max_throughput": res.value,
+         "cut_capacity": res.cut_capacity,
+         "source_side": res.source_side,
+         "cut_lanes": [
+               {"src": c.src, "dst": c.dst, "capacity": c.capacity}
+               for c in res.cut_lanes
+         ],
+      }, indent=2))
+      return 0
+   if getattr(args, "trace", False):
+      print("Edmonds-Karp, iteration by iteration")
+      print("(BFS picks a fewest-hop augmenting path each round; ties may pick a")
+      print(" different-but-valid path than a handout, so this is *a* correct run.)\n")
+      for st in res.trace:
+         path = " -> ".join(st.path)
+         terms = ", ".join(f"{c:g}" for c in st.lane_residuals)
+         print(f"Iteration {st.iteration}: {path}")
+         print(f"  bottleneck = min({terms}) = {st.bottleneck:g}")
+         print(f"  cumulative flow = {st.total_after:g}")
+         if st.used_reverse:
+               arcs = ", ".join(f"{u}->{v}" for u, v in st.used_reverse)
+               print(f"  * uses reverse arc(s) {arcs} to cancel/reroute earlier flow "
+                     f"-- this is where the residual graph earns its keep")
+         if st.forward_residual:
+               fwd = "  ".join(f"{u}->{v} {c:g}" for u, v, c in st.forward_residual)
+               print(f"  residual (spare capacity): {fwd}")
+         if st.reverse_residual:
+               rev = "  ".join(f"{u}->{v} {c:g}" for u, v, c in st.reverse_residual)
+               print(f"  residual (reverse/cancel): {rev}")
+         print()
+      print("No augmenting path remains -> flow is maximum.\n")
+   print(f"Max throughput (s->t, units/window): {res.value:g}")
+   print(f"Min-cut capacity (= max flow, by duality): {res.cut_capacity:g}")
+   print("\nWitness cut -- the cheapest capacity-weighted blockade.")
+   print("Sever these lanes and throughput cannot exceed the value above:")
+   for c in sorted(res.cut_lanes, key=lambda x: -x.capacity):
+      print(f"  {c.src} -> {c.dst:<12} capacity {c.capacity:g}")
+   print("\nThis cut is the certificate: it proves no plan can move more.")
+   return 0
+
+
+def cmd_interdict(args) -> int:
+   _, net = _load(args)
+   if args.budget is None:
+      inter = min_cut_interdiction(net)
+      if args.json:
+         print(json.dumps({
+               "mode": "min_cut",
+               "baseline_throughput": inter.baseline_throughput,
+               "cut_capacity": inter.cut_capacity,
+               "cut_lanes": [
+                  {"src": c.src, "dst": c.dst, "capacity": c.capacity}
+                  for c in inter.cut_lanes
+               ],
+         }, indent=2))
+         return 0
+      print("Interdiction -- capacity-weighted (polynomial, = min cut)")
+      print(f"Baseline throughput: {inter.baseline_throughput:g}")
+      print(f"Capacity cost to zero it out: {inter.cut_capacity:g}")
+      print("Cheapest blockade lanes:")
+      for c in sorted(inter.cut_lanes, key=lambda x: -x.capacity):
+         print(f"  {c.src} -> {c.dst:<12} capacity {c.capacity:g}")
+      return 0
+
+   res = budget_interdiction(net, budget=args.budget, method=args.method)
+   if args.json:
+      print(json.dumps({
+         "mode": "budget",
+         "method": res.method,
+         "budget": res.budget,
+         "baseline_throughput": res.baseline_throughput,
+         "residual_throughput": res.residual_throughput,
+         "removed": [{"src": s, "dst": d} for s, d in res.removed],
+         "subsets_considered": res.subsets_considered,
+         "min_cut_capacity": res.min_cut_capacity,
+      }, indent=2))
+      return 0
+   print(f"Interdiction -- budget-constrained, at most {res.budget} lane(s) "
+         f"(NP-hard; method={res.method})")
+   print(f"Subsets the optimum would search: {res.subsets_considered:,} "
+         f"(C(|E|,1..k); this is the combinatorial cliff)")
+   print(f"Baseline throughput:  {res.baseline_throughput:g}")
+   print(f"Residual throughput:  {res.residual_throughput:g}  "
+         f"(after removing {len(res.removed)} lane(s))")
+   print("Lanes removed:")
+   for s, d in res.removed:
+      print(f"  {s} -> {d}")
+   if not res.removed:
+      print("  (none improved throughput)")
+   return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
    p = argparse.ArgumentParser(
       prog="clopt",
@@ -172,6 +271,22 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Comma-separated lambda values.")
    sp.set_defaults(func=cmd_sweep)
 
+   sp = sub.add_parser("maxflow",
+                           help="Max throughput and the min-cut certificate (Days 2-3).")
+   add_common(sp)
+   sp.add_argument("--trace", action="store_true",
+                  help="Print each Edmonds-Karp augmentation and the residual graph.")
+   sp.set_defaults(func=cmd_maxflow)
+
+   sp = sub.add_parser("interdict",
+                        help="Adversary's cheapest blockade. Min-cut, or --budget k (Day 4).")
+   add_common(sp)
+   sp.add_argument("--budget", type=int, default=None,
+                  help="Max lanes the interdictor may remove (omit for min-cut interdiction).")
+   sp.add_argument("--method", choices=["auto", "exhaustive", "greedy"],
+                  default="auto", help="Search strategy for budget interdiction.")
+   sp.set_defaults(func=cmd_interdict)
+
    return p
 
 
@@ -192,3 +307,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
    sys.exit(main())
+   

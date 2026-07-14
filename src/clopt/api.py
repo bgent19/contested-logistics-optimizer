@@ -21,6 +21,8 @@ from pydantic import BaseModel
 from .routing import cheapest_path, safest_path
 from .scenario import Scenario, load_scenario
 from .solver import solve_allocation, pareto_sweep
+from .throughput import max_flow_min_cut
+from .interdiction import budget_interdiction, min_cut_interdiction
 
 DATA_PATH = os.environ.get("CLOPT_DATA", "data/theater_sample.json")
 
@@ -162,3 +164,45 @@ def sweep(
                transit_cost=r.transit_cost, risk_exposure=r.risk_exposure)
       for r in results
    ]
+
+
+@app.get("/maxflow")
+def maxflow(threat: Optional[str] = Query(None)) -> dict:
+   res = max_flow_min_cut(_net_for(threat))
+   return {
+      "max_throughput": res.value,
+      "cut_capacity": res.cut_capacity,
+      "source_side": res.source_side,
+      "cut_lanes": [{"src": c.src, "dst": c.dst, "capacity": c.capacity}
+                     for c in res.cut_lanes],
+   }
+
+
+@app.get("/interdict")
+def interdict(
+   budget: Optional[int] = Query(None, ge=1,
+                                 description="Max lanes to remove; omit for min-cut interdiction."),
+   method: str = Query("auto", pattern="^(auto|exhaustive|greedy)$"),
+   threat: Optional[str] = Query(None),
+) -> dict:
+   net = _net_for(threat)
+   if budget is None:
+      inter = min_cut_interdiction(net)
+      return {
+         "mode": "min_cut",
+         "baseline_throughput": inter.baseline_throughput,
+         "cut_capacity": inter.cut_capacity,
+         "cut_lanes": [{"src": c.src, "dst": c.dst, "capacity": c.capacity}
+                        for c in inter.cut_lanes],
+      }
+   res = budget_interdiction(net, budget=budget, method=method)
+   return {
+      "mode": "budget",
+      "method": res.method,
+      "budget": res.budget,
+      "baseline_throughput": res.baseline_throughput,
+      "residual_throughput": res.residual_throughput,
+      "removed": [{"src": s, "dst": d} for s, d in res.removed],
+      "subsets_considered": res.subsets_considered,
+      "min_cut_capacity": res.min_cut_capacity,
+   }

@@ -1,0 +1,24 @@
+{
+  "name": "Textbook max-flow (unit Day 2)",
+  "description": "The six-node worked example from the flow-networks unit. Edmonds-Karp finds maximum flow 14 (s->A->C->t pushes 4, s->B->D->t pushes 9, then s->A->D->t rebalances 1 across the residual A->D edge). The minimum cut also has capacity 14, certifying optimality. Modeled here with s as the sole supply and t as the sole demand; supply/demand quantities are set high so the lane capacities are what bind.",
+  "network": {
+    "nodes": [
+      { "id": "s", "kind": "supply", "quantity": 20, "label": "source" },
+      { "id": "A", "kind": "transship" },
+      { "id": "B", "kind": "transship" },
+      { "id": "C", "kind": "transship" },
+      { "id": "D", "kind": "transship" },
+      { "id": "t", "kind": "demand", "quantity": 20, "label": "sink" }
+    ],
+    "edges": [
+      { "src": "s", "dst": "A", "cap": 10, "cost": 1 },
+      { "src": "s", "dst": "B", "cap": 10, "cost": 1 },
+      { "src": "A", "dst": "C", "cap": 4,  "cost": 1 },
+      { "src": "A", "dst": "D", "cap": 2,  "cost": 1 },
+      { "src": "B", "dst": "D", "cap": 9,  "cost": 1 },
+      { "src": "C", "dst": "t", "cap": 10, "cost": 1 },
+      { "src": "D", "dst": "t", "cap": 10, "cost": 1 }
+    ]
+  },
+  "threat_pictures": {}
+}
