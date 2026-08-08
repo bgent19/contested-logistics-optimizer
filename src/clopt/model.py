@@ -30,6 +30,23 @@ class NodeKind(str, Enum):
    DEMAND = "demand"
    TRANSIT = "transit"
 
+   @classmethod
+   def _missing_(cls, value: object) -> Optional["NodeKind"]:
+      """Accept the spellings a hand-authored scenario file actually uses.
+
+      Scenario JSON is written by people. The canonical value here is
+      "transit", but the unit notes -- and this module's own docstring --
+      call a pure routing junction a *transshipment* node, so that is what
+      gets typed. A theater that refuses to load in front of a class is a
+      worse outcome than an enum that knows its own synonyms.
+      """
+      if not isinstance(value, str):
+         return None
+      key = value.strip().lower()
+      if key in {"transship", "transshipment", "transhipment"}:
+         return cls.TRANSIT
+      return next((m for m in cls if m.value == key), None)
+
 @dataclass
 class Node:
    id: str
