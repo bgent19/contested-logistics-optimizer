@@ -9,7 +9,7 @@
 PYTHON ?= python3
 DATA   ?= data/theater_sample.json
 
-.PHONY: help install test run demo sweep api docker-build docker-run clean
+.PHONY: help install test run demo sweep api proto-layout docker-build docker-run clean
 
 help:
 	@echo "Targets: install | test | run | demo | sweep | api | docker-build | docker-run | clean"
@@ -44,6 +44,10 @@ sweep:
 
 api:
 	PYTHONPATH=src CLOPT_DATA=$(DATA) $(PYTHON) -m uvicorn clopt.api:app --reload --host 0.0.0.0 --port 8000
+
+# Throwaway layout prototype (wayfinder #4) -- opens a self-contained page, no server.
+proto-layout:
+	$(PYTHON) -c "import webbrowser,pathlib; webbrowser.open(pathlib.Path('prototypes/layout-prototype/index.html').resolve().as_uri())"
 
 docker-build:
 	docker build -t clopt:latest .

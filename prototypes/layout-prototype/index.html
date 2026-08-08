@@ -1,0 +1,476 @@
+<!doctype html>
+<!--
+  THROWAWAY PROTOTYPE -- wayfinder ticket #4 "Graph layout: where do node positions come from?"
+
+  Question: where do node positions on the drawn graph come from, and which
+  candidate survives the pedagogical constraint that a layout must NOT reflow
+  when a disruption removes an edge or a node (Day 3 min-cut, Day 4 interdiction
+  both depend on before/after comparison on a stable picture)?
+
+  Four variants of the same view, switchable via ?variant= and the floating bar:
+    A - authored     : x/y hand-placed in the scenario file, geographic feel
+    B - layered      : computed, Sugiyama-ish columns supply -> transit -> demand
+    C - force        : computed, Fruchterman-Reingold spring simulation
+    D - hybrid       : authored anchors win; unauthored nodes fall back to layered
+
+  Orthogonal control: "freeze on baseline" computes the layout once on the
+  pristine network and reuses those coordinates under every threat picture.
+
+  No build step, no network fetch, no dependencies -- open the file.
+  Not production code: no tests, no error handling, no abstractions.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Layout prototype - wayfinder #4</title>
+<style>
+  :root { --bg:#11151c; --panel:#1a2029; --ink:#e8edf4; --dim:#8b97a8; --line:#2a3240; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:14px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif; }
+  header { padding:14px 20px 10px; border-bottom:1px solid var(--line); }
+  h1 { font-size:15px; margin:0 0 8px; font-weight:600; letter-spacing:.02em; }
+  .controls { display:flex; gap:18px; align-items:center; flex-wrap:wrap; font-size:13px; }
+  label { color:var(--dim); display:flex; gap:6px; align-items:center; }
+  select, button { background:var(--panel); color:var(--ink); border:1px solid var(--line);
+                   border-radius:6px; padding:4px 8px; font:inherit; }
+  button { cursor:pointer; }
+  main { display:flex; gap:0; height:calc(100vh - 132px); }
+  #stage { flex:1; min-width:0; }
+  svg { width:100%; height:100%; display:block; }
+  aside { width:320px; border-left:1px solid var(--line); padding:14px 16px;
+          overflow:auto; background:var(--panel); font-size:13px; }
+  aside h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+             color:var(--dim); margin:0 0 8px; font-weight:600; }
+  aside p { margin:0 0 12px; color:var(--dim); }
+  .metric { font-size:26px; color:var(--ink); font-variant-numeric:tabular-nums; }
+  .metric small { font-size:12px; color:var(--dim); display:block; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; margin-bottom:14px; }
+  td { padding:2px 0; color:var(--dim); font-variant-numeric:tabular-nums; }
+  td.n { text-align:right; color:var(--ink); }
+  .verdict { border-left:3px solid #d98a2b; padding-left:10px; color:var(--ink); }
+
+  /* graph marks */
+  .edge { stroke:#4d5a6d; stroke-width:2; fill:none; }
+  .edge.ghost { stroke:#333b47; stroke-dasharray:3 5; }
+  .elabel { fill:#7d8a9c; font-size:11px; font-variant-numeric:tabular-nums; }
+  .node circle { stroke-width:2; }
+  .supply circle { fill:#1d4a63; stroke:#4aa3c9; }
+  .demand circle { fill:#5c2f2a; stroke:#d1766a; }
+  .transit circle { fill:#242c38; stroke:#5c6b80; }
+  .node text { fill:var(--ink); font-size:11px; font-weight:600; text-anchor:middle; }
+  .node.dropped { opacity:.22; }
+  .ghostpos { fill:none; stroke:#d98a2b; stroke-width:1.5; stroke-dasharray:2 4; }
+  .drift { stroke:#d98a2b; stroke-width:1.5; }
+
+  /* floating switcher */
+  #bar { position:fixed; left:50%; transform:translateX(-50%); bottom:18px;
+         display:flex; align-items:center; gap:2px; background:#f2f5f9; color:#11151c;
+         border-radius:999px; padding:5px 6px; box-shadow:0 6px 24px rgba(0,0,0,.5);
+         font-weight:600; font-size:13px; z-index:10; }
+  #bar button { background:transparent; border:0; color:#11151c; font-size:16px;
+                padding:2px 10px; line-height:1; }
+  #bar span { padding:0 12px; min-width:220px; text-align:center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Layout prototype &mdash; wayfinder #4 &middot; does the picture hold still when the network changes?</h1>
+  <div class="controls">
+    <label>dataset
+      <select id="dataset">
+        <option value="theater">Archipelago Resupply (9 nodes)</option>
+        <option value="textbook">Textbook max-flow (Day 2)</option>
+      </select>
+    </label>
+    <label>threat picture <select id="threat"></select></label>
+    <label><input type="checkbox" id="freeze"> freeze layout on baseline</label>
+    <label><input type="checkbox" id="ghost" checked> show baseline positions</label>
+    <button id="reseed">re-run simulation (C)</button>
+  </div>
+</header>
+
+<main>
+  <div id="stage"><svg id="svg" viewBox="0 0 940 720" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+              markerHeight="6" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#4d5a6d"/>
+      </marker>
+    </defs>
+    <g id="edges"></g><g id="drift"></g><g id="ghosts"></g><g id="nodes"></g>
+  </svg></div>
+  <aside>
+    <h2>Variant</h2>
+    <p id="blurb"></p>
+    <h2>Stability under this threat</h2>
+    <div class="metric"><span id="drift-mean">0</span> px
+      <small>mean displacement of surviving nodes vs. baseline layout</small></div>
+    <table id="drift-table"></table>
+    <h2>What to watch</h2>
+    <p class="verdict">Flip through A&ndash;D with a threat picture selected. Any
+      non-zero drift means a student comparing before/after is also tracking nodes
+      that moved for reasons that have nothing to do with the algorithm.</p>
+  </aside>
+</main>
+
+<div id="bar">
+  <button id="prev">&larr;</button><span id="label"></span><button id="next">&rarr;</button>
+</div>
+
+<script>
+/* ---------------------------------------------------------------- data ---- */
+const DATA = {
+  theater: {
+    name: "Archipelago Resupply (sample)",
+    nodes: [
+      {id:"HUB-ALPHA", kind:"supply", quantity:120},
+      {id:"HUB-BRAVO", kind:"supply", quantity:60},
+      {id:"LANE-J1",   kind:"transit"},
+      {id:"LANE-J2",   kind:"transit"},
+      {id:"STRAIT-3",  kind:"transit"},
+      {id:"AIRHEAD-7", kind:"transit"},
+      {id:"FOB-KILO",  kind:"demand", quantity:70},
+      {id:"FOB-LIMA",  kind:"demand", quantity:50},
+      {id:"FOB-MIKE",  kind:"demand", quantity:40}
+    ],
+    edges: [
+      {src:"HUB-ALPHA",dst:"LANE-J1",cap:120,cost:4},
+      {src:"HUB-ALPHA",dst:"STRAIT-3",cap:80,cost:2},
+      {src:"HUB-BRAVO",dst:"LANE-J2",cap:60,cost:3},
+      {src:"LANE-J1",dst:"LANE-J2",cap:90,cost:3,bidirectional:true},
+      {src:"LANE-J1",dst:"AIRHEAD-7",cap:40,cost:6},
+      {src:"LANE-J1",dst:"FOB-KILO",cap:60,cost:6},
+      {src:"STRAIT-3",dst:"FOB-KILO",cap:80,cost:2},
+      {src:"LANE-J2",dst:"FOB-KILO",cap:50,cost:4},
+      {src:"LANE-J2",dst:"FOB-LIMA",cap:50,cost:5},
+      {src:"LANE-J2",dst:"FOB-MIKE",cap:30,cost:7},
+      {src:"AIRHEAD-7",dst:"FOB-LIMA",cap:25,cost:8},
+      {src:"AIRHEAD-7",dst:"FOB-MIKE",cap:25,cost:9}
+    ],
+    threats: {
+      strait_mined: [{kind:"remove_edge",src:"HUB-ALPHA",dst:"STRAIT-3"},
+                     {kind:"remove_edge",src:"STRAIT-3",dst:"FOB-KILO"}],
+      bravo_struck: [{kind:"remove_node",node:"HUB-BRAVO"}],
+      j2_pressure:  [{kind:"scale_capacity",src:"LANE-J1",dst:"LANE-J2",factor:0.4}]
+    },
+    /* variant A: every node hand-placed, geographic feel */
+    authored: {
+      "HUB-ALPHA":[110,250], "HUB-BRAVO":[110,540],
+      "LANE-J1":[360,190], "STRAIT-3":[360,400], "LANE-J2":[360,590],
+      "AIRHEAD-7":[600,120],
+      "FOB-KILO":[830,270], "FOB-LIMA":[830,450], "FOB-MIKE":[830,630]
+    },
+    /* variant D: only the endpoints are anchored; junctions are computed */
+    anchors: ["HUB-ALPHA","HUB-BRAVO","FOB-KILO","FOB-LIMA","FOB-MIKE"]
+  },
+
+  textbook: {
+    name: "Textbook max-flow (unit Day 2)",
+    nodes: [
+      {id:"s",kind:"supply",quantity:20},
+      {id:"A",kind:"transit"},{id:"B",kind:"transit"},
+      {id:"C",kind:"transit"},{id:"D",kind:"transit"},
+      {id:"t",kind:"demand",quantity:20}
+    ],
+    edges: [
+      {src:"s",dst:"A",cap:10,cost:1},{src:"s",dst:"B",cap:10,cost:1},
+      {src:"A",dst:"C",cap:4,cost:1},{src:"A",dst:"D",cap:2,cost:1},
+      {src:"B",dst:"D",cap:9,cost:1},
+      {src:"C",dst:"t",cap:10,cost:1},{src:"D",dst:"t",cap:10,cost:1}
+    ],
+    threats: {
+      /* not in the shipped file -- here to exercise Day 4 interdiction on the
+         dataset whose published layout students have already seen */
+      cut_AC: [{kind:"remove_edge",src:"A",dst:"C"}],
+      cut_BD: [{kind:"remove_edge",src:"B",dst:"D"}]
+    },
+    /* the layout as printed in the unit notes */
+    authored: { "s":[130,360], "A":[380,200], "B":[380,520],
+                "C":[640,200], "D":[640,520], "t":[860,360] },
+    anchors: ["s","t"]
+  }
+};
+
+/* ------------------------------------------------------------ variants ---- */
+const VARIANTS = {
+  A: {name:"Authored coordinates",
+      blurb:"Every node carries hand-placed x/y in the scenario file. The drawing " +
+            "is a decision made once by the author; nothing is computed at runtime. " +
+            "Positions cannot move because nothing moves them."},
+  B: {name:"Layered (supply→transit→demand)",
+      blurb:"Columns are longest-path depth from the supply nodes; demand is pinned " +
+            "to the last column; vertical order is one barycenter sweep to reduce " +
+            "crossings. Derived entirely from topology — so topology changes move nodes."},
+  C: {name:"Force-directed (spring)",
+      blurb:"Fruchterman–Reingold: edges pull, nodes repel, cooled over 300 " +
+            "iterations from a random start. Pretty, self-arranging, and different " +
+            "every run — re-run the simulation and watch the whole picture change."},
+  D: {name:"Hybrid: authored anchors + computed fill",
+      blurb:"Hubs and FOBs (source/sink on the textbook set) are authored; the " +
+            "junctions in between are laid out by the layered algorithm and snapped " +
+            "toward their anchors. Author the parts that carry meaning, compute the rest."}
+};
+const KEYS = Object.keys(VARIANTS);
+
+/* ------------------------------------------------------------- helpers ---- */
+function applyThreat(ds, key) {
+  const d = DATA[ds];
+  let nodes = d.nodes.map(n => ({...n}));
+  let edges = d.edges.map(e => ({...e}));
+  const dropped = new Set();
+  for (const op of (d.threats[key] || [])) {
+    if (op.kind === "remove_node") {
+      dropped.add(op.node);
+      edges = edges.filter(e => e.src !== op.node && e.dst !== op.node);
+    } else if (op.kind === "remove_edge") {
+      edges = edges.filter(e => !(e.src === op.src && e.dst === op.dst));
+    } else if (op.kind === "scale_capacity") {
+      for (const e of edges)
+        if (e.src === op.src && e.dst === op.dst) e.cap = Math.round(e.cap * op.factor);
+    }
+  }
+  nodes = nodes.filter(n => !dropped.has(n.id));
+  return {nodes, edges, dropped};
+}
+
+const W = 940, H = 720, PAD = 110;
+
+function layoutAuthored(net, ds) {
+  const pos = {};
+  for (const n of net.nodes) {
+    const a = DATA[ds].authored[n.id];
+    if (a) pos[n.id] = {x:a[0], y:a[1]};
+  }
+  return pos;
+}
+
+function layoutLayered(net) {
+  const ids = net.nodes.map(n => n.id);
+  const succ = {}, pred = {};
+  ids.forEach(i => {succ[i]=[]; pred[i]=[];});
+  for (const e of net.edges) {
+    if (!succ[e.src] || !pred[e.dst]) continue;
+    succ[e.src].push(e.dst); pred[e.dst].push(e.src);
+    if (e.bidirectional) { succ[e.dst].push(e.src); pred[e.src].push(e.dst); }
+  }
+  // longest-path depth by relaxation (graph may contain a 2-cycle)
+  const layer = {};
+  ids.forEach(i => layer[i] = 0);
+  for (let it = 0; it < ids.length; it++) {
+    let moved = false;
+    for (const e of net.edges) {
+      if (layer[e.dst] === undefined || layer[e.src] === undefined) continue;
+      if (layer[e.dst] < layer[e.src] + 1) { layer[e.dst] = layer[e.src] + 1; moved = true; }
+    }
+    if (!moved) break;
+  }
+  const maxL = Math.max(...ids.map(i => layer[i]));
+  for (const n of net.nodes) if (n.kind === "demand") layer[n.id] = maxL;
+
+  const cols = {};
+  for (const i of ids) (cols[layer[i]] ||= []).push(i);
+  const pos = {};
+  const place = () => {
+    for (const L of Object.keys(cols)) {
+      const col = cols[L], step = (H - 2*PAD) / Math.max(col.length, 1);
+      col.forEach((id, k) => {
+        pos[id] = {x: PAD + (maxL ? (W - 2*PAD) * (L / maxL) : 0),
+                   y: PAD + step * (k + 0.5)};
+      });
+    }
+  };
+  place();
+  for (let sweep = 0; sweep < 4; sweep++) {          // barycenter ordering
+    for (const L of Object.keys(cols).sort((a,b)=>a-b)) {
+      cols[L].sort((a, b) => bary(a) - bary(b));
+    }
+    place();
+  }
+  function bary(id) {
+    const ns = pred[id].length ? pred[id] : succ[id];
+    if (!ns.length) return pos[id] ? pos[id].y : H/2;
+    return ns.reduce((s,p) => s + (pos[p] ? pos[p].y : H/2), 0) / ns.length;
+  }
+  return pos;
+}
+
+let SEED = 7;
+function rng() { SEED = (SEED * 1103515245 + 12345) % 2147483648; return SEED / 2147483648; }
+
+function layoutForce(net, seed) {
+  SEED = seed;
+  const ids = net.nodes.map(n => n.id);
+  const pos = {};
+  ids.forEach(i => pos[i] = {x: PAD + rng()*(W-2*PAD), y: PAD + rng()*(H-2*PAD)});
+  const k = Math.sqrt((W-2*PAD)*(H-2*PAD) / ids.length);
+  let temp = (W - 2*PAD) / 8;
+  for (let it = 0; it < 300; it++) {
+    const disp = {}; ids.forEach(i => disp[i] = {x:0,y:0});
+    for (let a = 0; a < ids.length; a++) for (let b = a+1; b < ids.length; b++) {
+      const u = ids[a], v = ids[b];
+      let dx = pos[u].x-pos[v].x, dy = pos[u].y-pos[v].y;
+      let d = Math.hypot(dx,dy) || 0.01;
+      const f = (k*k)/d;
+      disp[u].x += dx/d*f; disp[u].y += dy/d*f;
+      disp[v].x -= dx/d*f; disp[v].y -= dy/d*f;
+    }
+    for (const e of net.edges) {
+      if (!pos[e.src] || !pos[e.dst]) continue;
+      let dx = pos[e.src].x-pos[e.dst].x, dy = pos[e.src].y-pos[e.dst].y;
+      let d = Math.hypot(dx,dy) || 0.01;
+      const f = (d*d)/k;
+      disp[e.src].x -= dx/d*f; disp[e.src].y -= dy/d*f;
+      disp[e.dst].x += dx/d*f; disp[e.dst].y += dy/d*f;
+    }
+    for (const i of ids) {
+      const d = Math.hypot(disp[i].x, disp[i].y) || 0.01;
+      pos[i].x += disp[i].x/d * Math.min(d, temp);
+      pos[i].y += disp[i].y/d * Math.min(d, temp);
+      pos[i].x = Math.max(PAD, Math.min(W-PAD, pos[i].x));
+      pos[i].y = Math.max(PAD, Math.min(H-PAD, pos[i].y));
+    }
+    temp *= 0.97;
+  }
+  return pos;
+}
+
+function layoutHybrid(net, ds) {
+  const anchors = new Set(DATA[ds].anchors);
+  const authored = DATA[ds].authored;
+  const pos = layoutLayered(net);
+  for (const n of net.nodes) if (anchors.has(n.id) && authored[n.id])
+    pos[n.id] = {x: authored[n.id][0], y: authored[n.id][1]};
+  return pos;
+}
+
+function layoutFor(key, net, ds, seed) {
+  if (key === "A") return layoutAuthored(net, ds);
+  if (key === "B") return layoutLayered(net);
+  if (key === "C") return layoutForce(net, seed);
+  return layoutHybrid(net, ds);
+}
+
+/* --------------------------------------------------------------- render --- */
+const $ = id => document.getElementById(id);
+let seed = 7;
+
+function currentVariant() {
+  const v = new URLSearchParams(location.search).get("variant");
+  return KEYS.includes(v) ? v : "A";
+}
+
+function render() {
+  const key = currentVariant();
+  const ds = $("dataset").value;
+  const threatKey = $("threat").value;
+  const frozen = $("freeze").checked;
+  const showGhost = $("ghost").checked;
+
+  const baseNet = applyThreat(ds, "__none__");
+  const net = applyThreat(ds, threatKey);
+
+  const basePos = layoutFor(key, baseNet, ds, seed);
+  const livePos = frozen ? basePos : layoutFor(key, net, ds, seed);
+
+  const eg = $("edges"), ng = $("nodes"), gg = $("ghosts"), dg = $("drift");
+  eg.innerHTML = ng.innerHTML = gg.innerHTML = dg.innerHTML = "";
+  const svgns = "http://www.w3.org/2000/svg";
+  const mk = (t, attrs) => { const e = document.createElementNS(svgns,t);
+    for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v); return e; };
+
+  const live = new Set(net.nodes.map(n => n.id));
+  const liveEdges = new Set(net.edges.map(e => e.src+">"+e.dst));
+
+  // ghost every edge from the pristine network; solid ones are still there
+  for (const e of baseNet.edges) {
+    const p = livePos[e.src], q = livePos[e.dst];
+    if (!p || !q) continue;
+    const alive = liveEdges.has(e.src+">"+e.dst) && live.has(e.src) && live.has(e.dst);
+    const line = mk("line", {x1:p.x, y1:p.y, x2:q.x, y2:q.y,
+      class: "edge" + (alive ? "" : " ghost")});
+    if (alive) { line.setAttribute("marker-end","url(#arrow)");
+      if (e.bidirectional) line.setAttribute("marker-start","url(#arrow)"); }
+    eg.appendChild(line);
+    if (alive) {
+      const cur = net.edges.find(x => x.src===e.src && x.dst===e.dst);
+      const lab = mk("text", {x:(p.x+q.x)/2, y:(p.y+q.y)/2 - 5, class:"elabel",
+                              "text-anchor":"middle"});
+      lab.textContent = cur.cap;
+      eg.appendChild(lab);
+    }
+  }
+
+  // baseline ghosts + drift leaders
+  let drifts = [];
+  for (const n of baseNet.nodes) {
+    const b = basePos[n.id], l = livePos[n.id];
+    if (!b) continue;
+    if (l && live.has(n.id)) {
+      const d = Math.hypot(b.x-l.x, b.y-l.y);
+      drifts.push([n.id, d]);
+      if (showGhost && d > 1.5) {
+        gg.appendChild(mk("circle", {cx:b.x, cy:b.y, r:20, class:"ghostpos"}));
+        dg.appendChild(mk("line", {x1:b.x, y1:b.y, x2:l.x, y2:l.y, class:"drift"}));
+      }
+    }
+  }
+
+  for (const n of baseNet.nodes) {
+    const p = livePos[n.id]; if (!p) continue;
+    const g = mk("g", {class:"node " + n.kind + (live.has(n.id) ? "" : " dropped"),
+                       transform:`translate(${p.x},${p.y})`});
+    g.appendChild(mk("circle", {r: n.kind === "transit" ? 16 : 22}));
+    const t = mk("text", {y: (n.kind === "transit" ? 16 : 22) + 15});
+    t.textContent = n.id;
+    g.appendChild(t);
+    if (n.quantity) { const q = mk("text",{y:4, style:"font-size:10px"});
+      q.textContent = n.quantity; g.appendChild(q); }
+    ng.appendChild(g);
+  }
+
+  // side panel
+  $("label").textContent = key + " — " + VARIANTS[key].name;
+  $("blurb").textContent = VARIANTS[key].blurb;
+  const moved = drifts.filter(([,d]) => d > 1.5);
+  const mean = drifts.length ? drifts.reduce((s,[,d]) => s+d, 0) / drifts.length : 0;
+  $("drift-mean").textContent = mean.toFixed(1);
+  $("drift-table").innerHTML = moved.length
+    ? "<tr><td>" + moved.sort((a,b)=>b[1]-a[1])
+        .map(([id,d]) => id + "</td><td class='n'>" + d.toFixed(0) + " px")
+        .join("</td></tr><tr><td>") + "</td></tr>"
+    : "<tr><td>nothing moved</td><td class='n'>&#10003;</td></tr>";
+}
+
+/* ----------------------------------------------------------- switching ---- */
+function setVariant(k) {
+  const u = new URL(location); u.searchParams.set("variant", k);
+  history.replaceState(null, "", u); render();
+}
+function cycle(step) {
+  const i = KEYS.indexOf(currentVariant());
+  setVariant(KEYS[(i + step + KEYS.length) % KEYS.length]);
+}
+$("prev").onclick = () => cycle(-1);
+$("next").onclick = () => cycle(1);
+addEventListener("keydown", e => {
+  if (/^(INPUT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+  if (e.key === "ArrowLeft") cycle(-1);
+  if (e.key === "ArrowRight") cycle(1);
+});
+
+function fillThreats() {
+  const d = DATA[$("dataset").value];
+  $("threat").innerHTML = "<option value='__none__'>none (baseline)</option>" +
+    Object.keys(d.threats).map(k => `<option value="${k}">${k}</option>`).join("");
+}
+$("dataset").onchange = () => { fillThreats(); render(); };
+$("threat").onchange = $("freeze").onchange = $("ghost").onchange = render;
+$("reseed").onclick = () => { seed = Math.floor(Math.random()*1e9); render(); };
+
+fillThreats();
+render();
+</script>
+</body>
+</html>
