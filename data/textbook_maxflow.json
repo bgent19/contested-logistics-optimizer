@@ -4,10 +4,10 @@
   "network": {
     "nodes": [
       { "id": "s", "kind": "supply", "quantity": 20, "label": "source" },
-      { "id": "A", "kind": "transship" },
-      { "id": "B", "kind": "transship" },
-      { "id": "C", "kind": "transship" },
-      { "id": "D", "kind": "transship" },
+      { "id": "A", "kind": "transit" },
+      { "id": "B", "kind": "transit" },
+      { "id": "C", "kind": "transit" },
+      { "id": "D", "kind": "transit" },
       { "id": "t", "kind": "demand", "quantity": 20, "label": "sink" }
     ],
     "edges": [
