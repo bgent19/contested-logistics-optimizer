@@ -319,6 +319,46 @@ def ordering(xs, edges):
     print()
 
 
+def live(xs):
+    """Which crossings are LIVE - carrying an annotation on at least one side?
+
+    A worry about "8 crossings at full strength" is only as big as the number of
+    crossings the eye is actually asked to trace through.  The layer sets below
+    are #3's per-view defaults; the annotated lane sets are the ones the map
+    already records.
+    """
+    print("=" * 78)
+    print("WHICH CROSSINGS ARE LIVE, PER VIEW")
+    print("=" * 78)
+    print()
+    # the augmenting path used by the rig: HUB-ALPHA -> LANE-J1 -> FOB-KILO
+    path = {"e00", "e05"}
+    cut = {"e05", "e06", "e07"}
+    naive = {"e02", "e09", "e00", "e05", "e03"}
+    violations = {"e02", "e09"}
+    views = [
+        ("Pristine (opening screen)", set(), "nothing is being traced"),
+        ("Flow & Cut - path beat", path, "the augmenting path"),
+        ("Flow & Cut - cut beat", cut, "the three severed lanes"),
+        ("Cost & Risk - naive", naive, "the naive load overlay"),
+        ("Cost & Risk - violations", violations, "the two over-capacity lanes"),
+    ]
+    for name, marked, what in views:
+        both = [c for c in xs if c["e1"] in marked and c["e2"] in marked]
+        one = [c for c in xs if (c["e1"] in marked) != (c["e2"] in marked)]
+        print("  %-28s  %s" % (name, what))
+        print("      annotated x annotated : %d %s"
+              % (len(both), "".join(" (%s x %s)" % (c["e1"], c["e2"]) for c in both)))
+        print("      annotated x bare lane : %d %s"
+              % (len(one), "".join(" (%s x %s)" % (c["e1"], c["e2"]) for c in one)))
+        print()
+    print("  The two worst blobs measured above - path x violation (77% of a node)")
+    print("  and naive x naive (56%) - both need two ANNOTATED lanes to cross.")
+    print("  On this theater, in every view, that count is zero.  The worst case")
+    print("  that actually occurs is a single annotation crossing a bare lane.")
+    print()
+
+
 if __name__ == "__main__":
     xs = report("THEATER - #17 corrected coordinates (STRAIT-3 at 300,400)",
                 THEATER_NODES, THEATER_EDGES, THEATER_ANCHORS,
@@ -326,5 +366,7 @@ if __name__ == "__main__":
     report("DAY 2 - #15 network, #17 re-authored coordinates",
            TEXTBOOK_NODES, TEXTBOOK_EDGES, None,
            (SUPPLY["textbook"], DEMAND["textbook"]))
-    casing([c for c in xs if ">" not in c["e1"] and ">" not in c["e2"]])
-    ordering([c for c in xs if ">" not in c["e1"] and ">" not in c["e2"]], THEATER_EDGES)
+    real = [c for c in xs if ">" not in c["e1"] and ">" not in c["e2"]]
+    casing(real)
+    ordering(real, THEATER_EDGES)
+    live(real)
