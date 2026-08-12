@@ -1,0 +1,740 @@
+<meta charset="utf-8">
+<title>Lane crossings at projector distance - wayfinder #23</title>
+<!--
+  THROWAWAY PROTOTYPE - wayfinder ticket #23.
+  "Does a lane crossing read as a crossing at the back of the room, or as a
+   junction that is not in the graph - and if not, what mark fixes it?"
+
+  Descends from #10's legibility rig: same environment / CVD / distance model,
+  same token discipline (JS sets geometry + classes, CSS owns appearance).
+  Trimmed to variant B's palette only, because #10 already settled that.
+
+  What is NEW here:
+    * #17's CORRECTED coordinates (STRAIT-3 at 300,400) and solved anchors
+    * the 8 crossings solved at load, with angles, exactly as measure.py reports
+    * four crossing treatments as the switchable variants
+    * a debug overlay that rings each crossing and labels its angle
+
+  Open the file. No build, no server, no dependencies.
+-->
+<style>
+* { box-sizing: border-box; }
+body { margin:0; background:#0d1117; color:#e8edf4;
+       font:13px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif; }
+header { padding:10px 16px 8px; border-bottom:1px solid #232b36; }
+h1 { font-size:14px; margin:0 0 8px; font-weight:600; letter-spacing:.02em; }
+.row { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+.row + .row { margin-top:7px; }
+label { color:#8b97a8; display:flex; gap:5px; align-items:center; white-space:nowrap; }
+select, button { background:#1a2029; color:#e8edf4; border:1px solid #2a3240;
+                 border-radius:5px; padding:3px 7px; font:inherit; }
+button { cursor:pointer; }
+main { display:flex; height:calc(100vh - 122px); }
+#stagewrap { flex:1; min-width:0; display:flex; align-items:center;
+             justify-content:center; overflow:hidden; background:#000; }
+#stage { transform-origin:center center; }
+aside { width:340px; border-left:1px solid #232b36; padding:12px 14px;
+        overflow-y:auto; background:#0d1117; }
+aside h2 { font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+           color:#8b97a8; margin:14px 0 6px; font-weight:600; }
+aside h2:first-child { margin-top:0; }
+.blurb { color:#a9b4c4; font-size:12px; margin:0 0 4px; }
+.cost { color:#e8c15f; font-size:12px; margin:6px 0 0; }
+table { width:100%; border-collapse:collapse; font-size:11px; }
+th,td { text-align:left; padding:2px 4px; border-bottom:1px solid #1b222c; }
+th { color:#8b97a8; font-weight:500; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+.pass { color:#5fd18a; } .warn { color:#e8c15f; } .fail { color:#f2705f; }
+.layers { display:grid; gap:2px; }
+.layers label { font-size:12px; color:#c6cfdb; cursor:pointer; }
+.hint { color:#6c7789; font-size:11px; margin-top:8px; line-height:1.4; }
+kbd { background:#1a2029; border:1px solid #2a3240; border-radius:3px;
+      padding:0 4px; font:11px ui-monospace,monospace; }
+#switcher { position:fixed; bottom:14px; left:50%; transform:translateX(-50%);
+            display:flex; gap:10px; align-items:center; background:#e8edf4;
+            color:#0d1117; border-radius:999px; padding:6px 8px; z-index:50;
+            box-shadow:0 4px 20px rgba(0,0,0,.6); font-weight:600; font-size:13px; }
+#switcher button { background:#0d1117; color:#e8edf4; border:none;
+                   border-radius:999px; width:26px; height:26px; padding:0; }
+#vname { min-width:270px; text-align:center; }
+
+/* ======================================================================
+   THE DIAGRAM.  #10 variant B's token values, which that ticket settled -
+   this prototype does not relitigate the palette, it only adds a crossing
+   treatment on top of it.
+   ====================================================================== */
+:root {
+  --bg:            #07090d;
+  --node-supply:   #0072b2;
+  --node-transit:  #3a4653;
+  --node-demand:   #d55e00;
+  --node-stroke:   #ffffff;
+  --node-w:        3;
+  --node-label:    17;
+  --node-sub:      12;
+  --node-ink:      #ffffff;
+
+  --lane:          #dfe6ef;
+  --lane-w:        4.5;
+
+  --synth:         #8d99a8;
+  --synth-w:       3;
+  --synth-dash:    2 9;
+
+  --residual:      #56b4e9;
+  --residual-w:    3;
+  --residual-dash: 11 6;
+
+  --path:          #f0e442;
+  --path-w:        11;
+
+  --cut:           #cc79a7;
+  --cut-w:         7;
+  --cut-dash:      16 8;
+
+  --naive:         #cc79a7;
+  --naive-w:       6;
+  --violation:     #d55e00;
+  --violation-w:   11;
+
+  --label:         15;
+  --label-ink:     #ffffff;
+  --plate-fill:    #07090d;
+  --plate-op:      .88;
+  --plate-pad:     3;
+  --flow:          19;
+  --flow-ink:      #ffffff;
+
+  /* ---- the one thing this ticket adds -------------------------------- */
+  /* #17's legible gap (2x the 6.9-unit back-row smear), used verbatim.
+     measure.py: a casing of 14 opens a >=1.0x-smear hole at all 8 crossings,
+     and the binding case is the crossing nearest 90 deg, not the shallowest. */
+  --casing:        var(--bg);
+  --casing-w:      14;
+  --casing-op:     0;          /* variants turn it on */
+  --hop-op:        0;          /* the bridge glyph */
+  --hop-w:         4.5;
+  --xdebug-op:     0;
+}
+
+/* -- Z: z-order only.  The current #10 behaviour, drawn for comparison. --- */
+.v-Z { }
+
+/* -- K: knockout casing at the 8 solved crossings only. ------------------ */
+.v-K { --casing-op: 1; }
+
+/* -- G: casing along every lane's whole length.  No crossing solver at all,
+      which is the cheapest possible implementation - and the variant that
+      shows what that cheapness costs. ------------------------------------ */
+.v-G { --casing-op: 1; }
+
+/* -- H: bridge / hop.  The under-lane breaks AND arcs over. -------------- */
+.v-H { --casing-op: 1; --hop-op: 1; }
+
+svg { background: var(--bg); display:block; }
+
+.lane      { stroke:var(--lane); stroke-width:var(--lane-w); fill:none;
+             marker-end:url(#ah); }
+.synth     { stroke:var(--synth); stroke-width:var(--synth-w);
+             stroke-dasharray:var(--synth-dash); fill:none; marker-end:url(#ah); }
+.node      { stroke:var(--node-stroke); stroke-width:var(--node-w); }
+.node.supply  { fill:var(--node-supply); }
+.node.transit { fill:var(--node-transit); }
+.node.demand  { fill:var(--node-demand); }
+.node.synthnode { fill:#22303f; stroke:var(--synth); stroke-dasharray:var(--synth-dash); }
+.nlabel    { fill:var(--node-ink); font-size:calc(var(--node-label) * 1px);
+             font-weight:700; text-anchor:middle; }
+.nsub      { fill:var(--node-ink); font-size:calc(var(--node-sub) * 1px);
+             text-anchor:middle; opacity:.82; }
+
+.residual  { stroke:var(--residual); stroke-width:var(--residual-w);
+             stroke-dasharray:var(--residual-dash); fill:none; marker-end:url(#ah-hollow); }
+.path      { stroke:var(--path); stroke-width:var(--path-w); fill:none;
+             stroke-linecap:round; }
+.cutline   { stroke:var(--cut); stroke-width:var(--cut-w);
+             stroke-dasharray:var(--cut-dash); fill:none; stroke-linecap:round; }
+.sside     { fill:url(#hatchS); }
+.tside     { fill:url(#hatchT); }
+.naive     { stroke:var(--naive); stroke-width:var(--naive-w); fill:none; }
+.violation { stroke:var(--violation); stroke-width:var(--violation-w); fill:none; }
+
+.elabel    { fill:var(--label-ink); font-size:calc(var(--label) * 1px);
+             text-anchor:middle; font-variant-numeric:tabular-nums; }
+.plate     { fill:var(--plate-fill); opacity:var(--plate-op); }
+.flowlabel { fill:var(--flow-ink); font-size:calc(var(--flow) * 1px);
+             font-weight:700; text-anchor:middle; font-variant-numeric:tabular-nums; }
+
+/* the casing: a background-coloured stroke drawn UNDER the over-mark and OVER
+   the under-mark.  Appearance is entirely in tokens, per #5. */
+.casing    { stroke:var(--casing); stroke-width:var(--casing-w); fill:none;
+             opacity:var(--casing-op); stroke-linecap:butt; }
+.hop       { stroke:var(--lane); stroke-width:var(--hop-w); fill:none;
+             opacity:var(--hop-op); }
+
+/* the debug ring, deliberately ugly - it is instrumentation, not a candidate */
+.xring     { fill:none; stroke:#f2705f; stroke-width:1.5; opacity:var(--xdebug-op); }
+.xtext     { fill:#f2705f; font-size:13px; text-anchor:middle;
+             opacity:var(--xdebug-op); font-weight:600; }
+
+.l-flow, .l-residual, .l-path, .l-cut, .l-naive, .l-cap { display:none; }
+.show-cap      .l-cap      { display:block; }
+.show-flow     .l-flow     { display:block; }
+.show-residual .l-residual { display:block; }
+.show-path     .l-path     { display:block; }
+.show-cut      .l-cut      { display:block; }
+.show-naive    .l-naive    { display:block; }
+</style>
+
+<header>
+  <h1>Lane crossings at projector distance &mdash; wayfinder #23 &mdash; THROWAWAY PROTOTYPE</h1>
+  <div class="row">
+    <label>view preset
+      <select id="preset">
+        <option value="pristine">Pristine (the opening screen)</option>
+        <option value="flowcut">Flow &amp; Cut (Day 2/3)</option>
+        <option value="path">Augmenting path only</option>
+        <option value="naive">Naive load (Day 1)</option>
+      </select></label>
+    <label>projector
+      <select id="env">
+        <option value="ideal">ideal (dark room, good unit)</option>
+        <option value="typical" selected>typical classroom</option>
+        <option value="washed">washed out (lights on, cheap unit)</option>
+      </select></label>
+    <label>colour vision
+      <select id="cvd">
+        <option value="none">normal</option>
+        <option value="deutan">deuteranopia</option>
+        <option value="protan">protanopia</option>
+        <option value="achroma">achromatopsia / greyscale</option>
+      </select></label>
+  </div>
+  <div class="row">
+    <label>viewing distance
+      <select id="dist">
+        <option value="front">front row (100%)</option>
+        <option value="mid">mid room (55% + acuity blur)</option>
+        <option value="back" selected>back row (32% + acuity blur)</option>
+      </select></label>
+    <label>casing width
+      <select id="cw">
+        <option value="0">0 (off)</option>
+        <option value="7">7 (half the legible gap)</option>
+        <option value="14" selected>14 (#17's legible gap)</option>
+        <option value="20">20 (generous)</option>
+      </select></label>
+    <label><input type="checkbox" id="xdebug"> ring the crossings</label>
+    <button id="stress">stress &rarr; washed + deutan + back row</button>
+  </div>
+</header>
+
+<main>
+  <div id="stagewrap"><div id="stage"></div></div>
+  <aside>
+    <h2>Variant</h2>
+    <p class="blurb" id="blurb"></p>
+    <p class="cost" id="costline"></p>
+
+    <h2>Layers</h2>
+    <div class="layers" id="layers"></div>
+
+    <h2>The 8 crossings <span style="font-weight:400;text-transform:none;letter-spacing:0">(solved at load)</span></h2>
+    <table id="xtab"><tbody></tbody></table>
+    <p class="hint">"hole" is the gap the casing opens in the lane it crosses,
+      measured <i>along</i> that lane: casing&nbsp;/&nbsp;sin&nbsp;&theta;. It must beat
+      2&times;&nbsp;the 6.9-unit back-row smear = <b>13.8</b>. Note the binding case is
+      the crossing nearest <b>90&deg;</b>, not the shallowest &mdash; the opposite of
+      every other quantity #17 derived.</p>
+
+    <h2>Blob size without a casing</h2>
+    <table id="btab"><tbody></tbody></table>
+    <p class="hint">Two smeared strokes crossing merge into one mark. Compared
+      against a node's <b>60</b>-unit diameter, since the ticket's worry is that it
+      reads as a junction the graph does not have.</p>
+
+    <p class="hint"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> variant &middot;
+      <kbd>1</kbd>&ndash;<kbd>4</kbd> preset &middot; <kbd>x</kbd> rings &middot;
+      <kbd>s</kbd> stress</p>
+  </aside>
+</main>
+
+<div id="switcher">
+  <button id="prev">&larr;</button><span id="vname"></span><button id="next">&rarr;</button>
+</div>
+
+<script type="module">
+/* ======================================================================
+   DATA - the theater with #17 section 3's CORRECTED coordinates.
+   STRAIT-3 is at (300,400), not (360,400).  Day 2 is not drawn here: it
+   has ZERO crossings under #17 section 4's re-authored coordinates, so it
+   has nothing to say about this ticket.
+   ====================================================================== */
+const W = 1060, H = 720, SHIFT = 60, R = 30;
+
+const NODES = [
+  {id:"HUB-ALPHA", kind:"supply",  q:120, x:110, y:250},
+  {id:"HUB-BRAVO", kind:"supply",  q:60,  x:110, y:540},
+  {id:"LANE-J1",   kind:"transit",        x:360, y:190},
+  {id:"STRAIT-3",  kind:"transit",        x:300, y:400},   /* #17: was 360 */
+  {id:"LANE-J2",   kind:"transit",        x:360, y:590},
+  {id:"AIRHEAD-7", kind:"transit",        x:600, y:120},
+  {id:"FOB-KILO",  kind:"demand",  q:70,  x:830, y:270},
+  {id:"FOB-LIMA",  kind:"demand",  q:50,  x:830, y:450},
+  {id:"FOB-MIKE",  kind:"demand",  q:40,  x:830, y:630}
+];
+const EDGES = [
+  {id:"e00", src:"HUB-ALPHA", dst:"LANE-J1",   cap:120},
+  {id:"e01", src:"HUB-ALPHA", dst:"STRAIT-3",  cap:80},
+  {id:"e02", src:"HUB-BRAVO", dst:"LANE-J2",   cap:60},
+  {id:"e03", src:"LANE-J1",   dst:"LANE-J2",   cap:90},
+  {id:"e04", src:"LANE-J1",   dst:"AIRHEAD-7", cap:40},
+  {id:"e05", src:"LANE-J1",   dst:"FOB-KILO",  cap:60},
+  {id:"e06", src:"STRAIT-3",  dst:"FOB-KILO",  cap:80},
+  {id:"e07", src:"LANE-J2",   dst:"FOB-KILO",  cap:50},
+  {id:"e08", src:"LANE-J2",   dst:"FOB-LIMA",  cap:50},
+  {id:"e09", src:"LANE-J2",   dst:"FOB-MIKE",  cap:30},
+  {id:"e10", src:"AIRHEAD-7", dst:"FOB-LIMA",  cap:25},
+  {id:"e11", src:"AIRHEAD-7", dst:"FOB-MIKE",  cap:25}
+];
+/* #17 section 3's solved anchors - the frontend recomputes these, but the
+   expected output is published, so the prototype uses it verbatim. */
+const ANCHOR = {
+  e00:[235,220], e01:[205,325], e02:[235,565], e03:[360,338.7],
+  e04:[480,155], e05:[595,230], e06:[565,335], e07:[595,430],
+  e08:[595,520], e09:[595,610], e10:[771.5,366], e11:[778.2,515.2]
+};
+const FLOW = {e00:80,e01:80,e02:60,e03:40,e04:25,e05:60,e06:80,e07:0,
+              e08:50,e09:30,e10:25,e11:0};
+/* an augmenting path chosen because it CROSSES things - LANE-J1 -> FOB-KILO
+   is e05, which crosses both AIRHEAD-7 lanes.  That is the case the ticket
+   calls "most likely to look like the path turning". */
+const PATH = ["S","HUB-ALPHA","LANE-J1","FOB-KILO","T"];
+const RESIDUAL = ["e03","e05","e08","e01"];
+const CUT = ["e05","e06","e07"];
+const SSIDE = ["HUB-ALPHA","HUB-BRAVO","LANE-J1","LANE-J2","STRAIT-3","AIRHEAD-7"];
+const NAIVE = {e02:90,e09:40,e00:70,e05:70,e03:90};
+const VIOLATIONS = ["e02","e09"];
+const SYN = {S:{x:30-SHIFT,y:H/2}, T:{x:1000-SHIFT,y:H/2}};
+
+const SMEAR = 6.9;              /* #10: 2.2px blur at 0.32 scale */
+
+/* ======================================================================
+   VARIANTS - four answers to "what mark says these lanes do not meet"
+   ====================================================================== */
+const VARIANTS = {
+  Z: {name:"Z - z-order only (baseline)",
+      blurb:"No crossing mark at all. Marks are painted in tiers - annotations "+
+            "over lanes - and nothing else is done. This is what #10 specified "+
+            "and what the frontend gets for free. Judge every other variant "+
+            "against this one, not against an imagined failure.",
+      cost:"Costs nothing. The question is whether it fails."},
+  K: {name:"K - knockout casing at crossings",
+      blurb:"Each of the 8 crossings is solved at load, and the over-mark carries "+
+            "a short background-coloured casing there, drawn beneath its own "+
+            "stroke and above the mark it crosses. The under-lane visibly breaks. "+
+            "Width 14 = #17's legible gap, unchanged.",
+      cost:"Costs a crossing solver at load (a sibling of #17's anchor solver) "+
+           "and a per-crossing DOM node. Spends no hue and no glyph."},
+  G: {name:"G - casing along every lane (no solver)",
+      blurb:"The same casing, but applied to every mark along its entire length "+
+            "rather than only at solved crossings. The cheapest possible "+
+            "implementation: no crossing geometry is ever computed. Turn on the "+
+            "min-cut layer to see what it costs.",
+      cost:"Costs nothing at load - but a full-length casing punches a "+
+           "background-coloured stripe through the S-side / T-side hatch, which "+
+           "sits under everything."},
+  H: {name:"H - bridge / hop glyph",
+      blurb:"The under-lane breaks AND arcs over the crossing, the way a road map "+
+            "draws an overpass. Unambiguous: it says 'these do not meet' in a "+
+            "vocabulary the room already knows from road atlases.",
+      cost:"Costs #5 a curved-path renderer - the thing #17 rejected when it "+
+           "declined to bend lanes - and spends the glyph channel that already "+
+           "carries the X on a removed lane."}
+};
+const KEYS = Object.keys(VARIANTS);
+
+const LAYERS = [["cap","capacity labels"],["flow","flow numerals"],
+                ["residual","residual arcs"],["path","augmenting path"],
+                ["cut","min-cut + S/T hatch"],["naive","naive load + violations"]];
+const PRESETS = {
+  pristine: ["cap"],
+  flowcut:  ["cap","flow","residual","path","cut"],
+  path:     ["path"],
+  naive:    ["naive","flow"]
+};
+
+const ENV = {ideal:{lift:0,sat:1}, typical:{lift:.14,sat:.90}, washed:{lift:.32,sat:.72}};
+const DIST = {front:{scale:1,blur:0}, mid:{scale:.55,blur:1.1}, back:{scale:.32,blur:2.2}};
+const CVD = {
+  none:null,
+  deutan:[0.367,0.861,-0.228,0,0, 0.280,0.673,0.047,0,0, -0.012,0.043,0.969,0,0, 0,0,0,1,0],
+  protan:[0.152,1.053,-0.205,0,0, 0.115,0.786,0.099,0,0, -0.004,-0.048,1.052,0,0, 0,0,0,1,0],
+  achroma:[0.213,0.715,0.072,0,0, 0.213,0.715,0.072,0,0, 0.213,0.715,0.072,0,0, 0,0,0,1,0]
+};
+
+/* ======================================================================
+   GEOMETRY
+   ====================================================================== */
+const NS = "http://www.w3.org/2000/svg";
+const stage = document.getElementById("stage");
+const mk = (t,a,txt) => {
+  const e = document.createElementNS(NS,t);
+  for (const k in a) e.setAttribute(k,a[k]);
+  if (txt !== undefined) e.textContent = txt;
+  return e;
+};
+const POS = Object.fromEntries(NODES.map(n => [n.id,{x:n.x,y:n.y}]));
+POS.S = SYN.S; POS.T = SYN.T;
+const eById = Object.fromEntries(EDGES.map(e => [e.id,e]));
+
+function trim(a,b,r1,r2) {
+  const dx=b.x-a.x, dy=b.y-a.y, L=Math.hypot(dx,dy)||1;
+  return {x1:a.x+dx/L*r1, y1:a.y+dy/L*r1, x2:b.x-dx/L*r2, y2:b.y-dy/L*r2};
+}
+function offsetSeg(s,off) {
+  const dx=s.x2-s.x1, dy=s.y2-s.y1, L=Math.hypot(dx,dy)||1;
+  const nx=-dy/L*off, ny=dx/L*off;
+  return {x1:s.x1+nx,y1:s.y1+ny,x2:s.x2+nx,y2:s.y2+ny};
+}
+const LANESEG = Object.fromEntries(
+  EDGES.map(e => [e.id, trim(POS[e.src],POS[e.dst],R,R+6)]));
+
+function hit(p,q) {
+  const d=(p.x2-p.x1)*(q.y2-q.y1)-(p.y2-p.y1)*(q.x2-q.x1);
+  if (Math.abs(d)<1e-9) return null;
+  const t=((q.x1-p.x1)*(q.y2-q.y1)-(q.y1-p.y1)*(q.x2-q.x1))/d;
+  const u=((q.x1-p.x1)*(p.y2-p.y1)-(q.y1-p.y1)*(p.x2-p.x1))/d;
+  if (t<=1e-6||t>=1-1e-6||u<=1e-6||u>=1-1e-6) return null;
+  return {x:p.x1+t*(p.x2-p.x1), y:p.y1+t*(p.y2-p.y1), t, u};
+}
+function ang(p,q) {
+  const a=Math.atan2(p.y2-p.y1,p.x2-p.x1), b=Math.atan2(q.y2-q.y1,q.x2-q.x1);
+  const d=(Math.abs(a-b)*180/Math.PI)%180;
+  return Math.min(d,180-d);
+}
+
+/* ---- THE CROSSING SET: solved once, on the pristine network, exactly like
+   #17's anchors.  Order within the pair is decided by lane rank, which is
+   DOM order - see measure.py's note on why that is a trap. -------------- */
+const CROSSINGS = (() => {
+  const out = [];
+  for (let i=0;i<EDGES.length;i++)
+    for (let j=i+1;j<EDGES.length;j++) {
+      const a=EDGES[i].id, b=EDGES[j].id;
+      const h = hit(LANESEG[a],LANESEG[b]);
+      if (!h) continue;
+      out.push({over:b, under:a, x:h.x, y:h.y, theta:ang(LANESEG[a],LANESEG[b])});
+    }
+  return out;
+})();
+
+/* ======================================================================
+   RENDER
+   ====================================================================== */
+let variant = new URLSearchParams(location.search).get("variant") || "Z";
+if (!KEYS.includes(variant)) variant = "Z";
+let preset = "pristine";
+let active = new Set(PRESETS[preset]);
+
+/* a casing segment: a short stub of the OVER mark, centred on the crossing,
+   long enough that the hole it opens beats the smear at any angle */
+function casingStub(seg, x, y, len) {
+  const dx=seg.x2-seg.x1, dy=seg.y2-seg.y1, L=Math.hypot(dx,dy)||1;
+  const ux=dx/L, uy=dy/L, h=len/2;
+  return {x1:x-ux*h, y1:y-uy*h, x2:x+ux*h, y2:y+uy*h};
+}
+
+function build() {
+  const casingW = parseFloat(document.getElementById("cw").value);
+  const svg = mk("svg", {
+    viewBox:`${-SHIFT} 0 ${W} ${H}`, width:W, height:H,
+    class:"v-"+variant+" "+[...active].map(a=>"show-"+a).join(" "),
+    style:`--casing-w:${casingW}`
+  });
+  const defs = mk("defs");
+  defs.innerHTML = `
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5"
+            markerHeight="5" orient="auto-start-reverse">
+      <path d="M0,1 L10,5 L0,9 z" fill="context-stroke"/></marker>
+    <marker id="ah-hollow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+            markerHeight="6" orient="auto-start-reverse">
+      <path d="M0.5,1.5 L9.5,5 L0.5,8.5 z" fill="none" stroke="context-stroke"
+            stroke-width="1.6"/></marker>
+    <pattern id="hatchS" width="14" height="14" patternTransform="rotate(45)"
+             patternUnits="userSpaceOnUse">
+      <rect width="14" height="14" fill="rgba(0,114,178,.22)"/>
+      <line x1="0" y1="0" x2="0" y2="14" stroke="#0072b2" stroke-width="5"/></pattern>
+    <pattern id="hatchT" width="14" height="14" patternTransform="rotate(-45)"
+             patternUnits="userSpaceOnUse">
+      <rect width="14" height="14" fill="rgba(213,94,0,.22)"/>
+      <line x1="0" y1="0" x2="0" y2="14" stroke="#d55e00" stroke-width="5"/></pattern>`;
+  svg.appendChild(defs);
+
+  /* --- min-cut territory hatch, under everything (the layer variant G
+         damages, which is the whole point of drawing G) ----------------- */
+  const gCut = mk("g",{class:"l-cut"});
+  const sPts = SSIDE.map(id=>POS[id]).concat([POS.S]);
+  const tPts = NODES.filter(n=>!SSIDE.includes(n.id)).map(n=>POS[n.id]).concat([POS.T]);
+  gCut.appendChild(mk("path",{class:"sside", d:hull(sPts,70)}));
+  gCut.appendChild(mk("path",{class:"tside", d:hull(tPts,70)}));
+  svg.appendChild(gCut);
+
+  /* --- lane tier.  Paint order IS DOM order (#5), so the later lane in the
+         array wins every crossing it takes part in. -------------------- */
+  const gLanes = mk("g");
+  for (const e of EDGES) {
+    const s = LANESEG[e.id];
+    /* G: the whole lane is cased, no crossing geometry consulted */
+    if (variant === "G")
+      gLanes.appendChild(mk("line",{...s, class:"casing"}));
+    /* K / H: only the crossings this lane is the OVER mark of */
+    if (variant === "K" || variant === "H")
+      for (const c of CROSSINGS) {
+        if (c.over !== e.id) continue;
+        const len = casingW / Math.sin(c.theta*Math.PI/180) + 2;
+        gLanes.appendChild(mk("line",{...casingStub(s,c.x,c.y,len), class:"casing"}));
+      }
+    gLanes.appendChild(mk("line",{...s, class:"lane", "data-e":e.id}));
+  }
+  /* H's hop: an arc on the OVER lane, sitting in the hole its casing opened */
+  if (variant === "H")
+    for (const c of CROSSINGS) {
+      const s = LANESEG[c.over];
+      const dx=s.x2-s.x1, dy=s.y2-s.y1, L=Math.hypot(dx,dy)||1;
+      const r = casingW/Math.sin(c.theta*Math.PI/180)/2 + 1;
+      const ax=c.x-dx/L*r, ay=c.y-dy/L*r, bx=c.x+dx/L*r, by=c.y+dy/L*r;
+      gLanes.appendChild(mk("path",{d:`M${ax},${ay} A${r},${r} 0 0 1 ${bx},${by}`,
+                                    class:"hop"}));
+    }
+  for (const n of NODES) {
+    if (n.kind==="supply") gLanes.appendChild(mk("line",{...trim(POS.S,POS[n.id],22,R+6), class:"synth"}));
+    if (n.kind==="demand") gLanes.appendChild(mk("line",{...trim(POS[n.id],POS.T,R,28), class:"synth"}));
+  }
+  svg.appendChild(gLanes);
+
+  /* --- annotation tier: always above the lane tier ------------------- */
+  const gNaive = mk("g",{class:"l-naive"});
+  for (const id in NAIVE) {
+    const s = offsetSeg(LANESEG[id],9);
+    const bad = VIOLATIONS.includes(id);
+    if (variant!=="Z") gNaive.appendChild(mk("line",{...s, class:"casing"}));
+    gNaive.appendChild(mk("line",{...s, class: bad?"violation":"naive"}));
+  }
+  svg.appendChild(gNaive);
+
+  const gRes = mk("g",{class:"l-residual"});
+  for (const id of RESIDUAL) {
+    const e = eById[id];
+    gRes.appendChild(mk("line",{...offsetSeg(trim(POS[e.dst],POS[e.src],R,R+6),11),
+                                class:"residual"}));
+  }
+  svg.appendChild(gRes);
+
+  const gPath = mk("g",{class:"l-path"});
+  for (let i=0;i<PATH.length-1;i++) {
+    const a=POS[PATH[i]], b=POS[PATH[i+1]];
+    if (!a||!b) continue;
+    const s = trim(a,b,R-4,R-4);
+    /* the path is the top tier, so it cases against EVERYTHING under it -
+       the case the ticket calls "most likely to look like the path turning" */
+    if (variant!=="Z") gPath.appendChild(mk("line",{...s, class:"casing"}));
+    gPath.appendChild(mk("line",{...s, class:"path"}));
+  }
+  svg.appendChild(gPath);
+
+  const gCutL = mk("g",{class:"l-cut"});
+  for (const id of CUT) {
+    const a = ANCHOR[id], s = LANESEG[id];
+    const dx=s.x2-s.x1, dy=s.y2-s.y1, L=Math.hypot(dx,dy)||1;
+    const nx=-dy/L*24, ny=dx/L*24;
+    gCutL.appendChild(mk("line",{x1:a[0]-nx,y1:a[1]-ny,x2:a[0]+nx,y2:a[1]+ny,
+                                 class:"cutline"}));
+  }
+  svg.appendChild(gCutL);
+
+  /* --- nodes --------------------------------------------------------- */
+  const gN = mk("g");
+  for (const [k,p] of [["S",POS.S],["T",POS.T]]) {
+    gN.appendChild(mk("circle",{cx:p.x,cy:p.y,r:22,class:"node synthnode"}));
+    gN.appendChild(mk("text",{x:p.x,y:p.y+6,class:"nlabel"},k));
+  }
+  for (const n of NODES) {
+    gN.appendChild(mk("circle",{cx:n.x,cy:n.y,r:R,class:"node "+n.kind}));
+    gN.appendChild(mk("text",{x:n.x,y:n.y+5,class:"nlabel"},
+                      n.id.replace(/^(HUB|FOB|LANE|AIRHEAD)-/,"")));
+    if (n.q!==undefined) gN.appendChild(mk("text",{x:n.x,y:n.y+48,class:"nsub"},n.q+" u"));
+  }
+  svg.appendChild(gN);
+
+  /* --- text at #17's solved anchors, not at midpoints ----------------- */
+  const gTxt = mk("g");
+  for (const e of EDGES) {
+    const [ax,ay] = ANCHOR[e.id];
+    const gc = mk("g",{class:"l-cap"});  gc.appendChild(plated(ax,ay-16,"cap "+e.cap,"elabel"));
+    const gf = mk("g",{class:"l-flow"}); gf.appendChild(plated(ax,ay+20,String(FLOW[e.id]??0),"flowlabel"));
+    gTxt.appendChild(gc); gTxt.appendChild(gf);
+  }
+  svg.appendChild(gTxt);
+
+  /* --- instrumentation ------------------------------------------------ */
+  const gX = mk("g");
+  for (const c of CROSSINGS) {
+    gX.appendChild(mk("circle",{cx:c.x,cy:c.y,r:26,class:"xring"}));
+    gX.appendChild(mk("text",{x:c.x,y:c.y-31,class:"xtext"},c.theta.toFixed(0)+"°"));
+  }
+  svg.appendChild(gX);
+
+  stage.replaceChildren(svg);
+  return svg;
+}
+
+function plated(x,y,str,cls) {
+  const g = mk("g"), r = mk("rect",{class:"plate",rx:3}), t = mk("text",{x,y,class:cls},str);
+  g.appendChild(r); g.appendChild(t);
+  requestAnimationFrame(() => {
+    const bb = t.getBBox(), pad = 3;
+    r.setAttribute("x",bb.x-pad); r.setAttribute("y",bb.y-pad);
+    r.setAttribute("width",bb.width+pad*2); r.setAttribute("height",bb.height+pad*2);
+  });
+  return g;
+}
+function hull(pts,pad) {
+  const cx=pts.reduce((a,p)=>a+p.x,0)/pts.length, cy=pts.reduce((a,p)=>a+p.y,0)/pts.length;
+  const sorted=[...pts].sort((a,b)=>Math.atan2(a.y-cy,a.x-cx)-Math.atan2(b.y-cy,b.x-cx));
+  return "M"+sorted.map(p=>{
+    const dx=p.x-cx,dy=p.y-cy,L=Math.hypot(dx,dy)||1;
+    return `${p.x+dx/L*pad},${p.y+dy/L*pad}`;
+  }).join("L")+"Z";
+}
+
+/* ======================================================================
+   ENVIRONMENT + READOUTS
+   ====================================================================== */
+function installFilters() {
+  const env = ENV[document.getElementById("env").value];
+  const cvd = CVD[document.getElementById("cvd").value];
+  let fx = document.getElementById("fx");
+  if (!fx) { fx = mk("svg",{id:"fx",style:"position:absolute;width:0;height:0"});
+             document.body.appendChild(fx); }
+  const s = 1-env.lift;
+  fx.innerHTML = `
+    <filter id="f-env" color-interpolation-filters="sRGB">
+      <feColorMatrix type="saturate" values="${env.sat}"/>
+      <feComponentTransfer>
+        <feFuncR type="linear" slope="${s}" intercept="${env.lift}"/>
+        <feFuncG type="linear" slope="${s}" intercept="${env.lift}"/>
+        <feFuncB type="linear" slope="${s}" intercept="${env.lift}"/>
+      </feComponentTransfer></filter>
+    ${cvd?`<filter id="f-cvd" color-interpolation-filters="sRGB">
+      <feColorMatrix type="matrix" values="${cvd.join(" ")}"/></filter>`:""}`;
+  const dist = DIST[document.getElementById("dist").value];
+  const chain = ["url(#f-env)"];
+  if (cvd) chain.push("url(#f-cvd)");
+  if (dist.blur) chain.push(`blur(${dist.blur}px)`);
+  stage.style.filter = chain.join(" ");
+  stage.style.transform = `scale(${dist.scale})`;
+}
+
+function readouts() {
+  const casingW = parseFloat(document.getElementById("cw").value);
+  const xt = document.querySelector("#xtab tbody");
+  xt.replaceChildren();
+  const h = document.createElement("tr");
+  h.innerHTML = "<th>over</th><th>under</th><th>angle</th><th>hole</th><th>vs 13.8</th>";
+  xt.appendChild(h);
+  for (const c of [...CROSSINGS].sort((a,b)=>b.theta-a.theta)) {
+    const hole = casingW/Math.sin(c.theta*Math.PI/180);
+    const k = hole/(2*SMEAR);
+    const cls = k>=1 ? "pass" : (k>=.75 ? "warn" : "fail");
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${c.over}</td><td>${c.under}</td>
+      <td class="num">${c.theta.toFixed(1)}°</td>
+      <td class="num">${hole.toFixed(1)}</td>
+      <td class="num ${cls}">${k.toFixed(2)}×</td>`;
+    xt.appendChild(tr);
+  }
+
+  const bt = document.querySelector("#btab tbody");
+  bt.replaceChildren();
+  const h2 = document.createElement("tr");
+  h2.innerHTML = "<th>case</th><th>worst blob</th><th>% of a node</th>";
+  bt.appendChild(h2);
+  for (const [label,w1,w2] of [["lane × lane",4.5,4.5],
+                               ["path × lane",11,4.5],
+                               ["path × violation",11,11],
+                               ["naive × naive",6,6]]) {
+    let worst = 0;
+    for (const c of CROSSINGS) {
+      const s = Math.sin(c.theta*Math.PI/180), th = c.theta*Math.PI/180;
+      const b1=(w2+SMEAR)/s, b2=(w1+SMEAR)/s;
+      worst = Math.max(worst, Math.sqrt(b1*b1+b2*b2+2*b1*b2*Math.cos(th)));
+    }
+    const pct = worst/60*100;
+    const cls = pct<50 ? "pass" : (pct<80 ? "warn" : "fail");
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${label}</td><td class="num">${worst.toFixed(1)}</td>
+                    <td class="num ${cls}">${pct.toFixed(0)}%</td>`;
+    bt.appendChild(tr);
+  }
+}
+
+/* ======================================================================
+   WIRING
+   ====================================================================== */
+function renderLayerChecks() {
+  const box = document.getElementById("layers");
+  box.replaceChildren();
+  for (const [key,name] of LAYERS) {
+    const l = document.createElement("label"), cb = document.createElement("input");
+    cb.type="checkbox"; cb.checked = active.has(key);
+    cb.onchange = () => { cb.checked ? active.add(key) : active.delete(key); draw(); };
+    l.appendChild(cb); l.append(" "+name);
+    box.appendChild(l);
+  }
+}
+function draw() {
+  document.getElementById("vname").textContent = VARIANTS[variant].name;
+  document.getElementById("blurb").textContent = VARIANTS[variant].blurb;
+  document.getElementById("costline").textContent = VARIANTS[variant].cost;
+  const svg = build();
+  svg.style.setProperty("--xdebug-op",
+    document.getElementById("xdebug").checked ? 1 : 0);
+  installFilters();
+  readouts();
+  const u = new URL(location); u.searchParams.set("variant",variant);
+  history.replaceState(null,"",u);
+}
+document.getElementById("prev").onclick = () =>
+  { variant = KEYS[(KEYS.indexOf(variant)-1+KEYS.length)%KEYS.length]; draw(); };
+document.getElementById("next").onclick = () =>
+  { variant = KEYS[(KEYS.indexOf(variant)+1)%KEYS.length]; draw(); };
+document.getElementById("preset").onchange = e => {
+  preset = e.target.value; active = new Set(PRESETS[preset]); renderLayerChecks(); draw(); };
+for (const id of ["env","cvd","dist","cw","xdebug"])
+  document.getElementById(id).onchange = draw;
+document.getElementById("stress").onclick = () => {
+  document.getElementById("env").value="washed";
+  document.getElementById("cvd").value="deutan";
+  document.getElementById("dist").value="back"; draw(); };
+addEventListener("keydown", e => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  if (e.key==="ArrowLeft")  document.getElementById("prev").click();
+  if (e.key==="ArrowRight") document.getElementById("next").click();
+  if (e.key==="s") document.getElementById("stress").click();
+  if (e.key==="x") { const c=document.getElementById("xdebug"); c.checked=!c.checked; draw(); }
+  const n = "1234".indexOf(e.key);
+  if (n>=0) { const sel=document.getElementById("preset");
+              sel.selectedIndex=n; sel.onchange({target:sel}); }
+});
+{ const q = new URLSearchParams(location.search);
+  for (const id of ["env","cvd","dist","preset","cw"]) {
+    const v = q.get(id); if (!v) continue;
+    const sel = document.getElementById(id);
+    if ([...sel.options].some(o=>o.value===v)) sel.value = v;
+  }
+  preset = document.getElementById("preset").value;
+  active = new Set(PRESETS[preset]);
+}
+renderLayerChecks();
+draw();
+</script>

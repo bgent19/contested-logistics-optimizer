@@ -10,7 +10,7 @@ PYTHON ?= python3
 DATA   ?= data/theater_sample.json
 
 .PHONY: help install test run demo sweep api docker-build docker-run clean \
-        proto-legibility
+        proto-legibility proto-crossings
 
 help:
 	@echo "Targets: install | test | run | demo | sweep | api | docker-build | docker-run | clean"
@@ -56,6 +56,12 @@ docker-run:
 # catalog. Self-contained page, no server and no dependencies.
 proto-legibility:
 	$(PYTHON) -c "import webbrowser,pathlib; webbrowser.open(pathlib.Path('prototypes/legibility-prototype/index.html').resolve().as_uri())"
+
+# Throwaway prototype for wayfinder #23 - do lane crossings read as crossings
+# at the back of the room? Descends from the #10 rig, on #17's coordinates.
+proto-crossings:
+	$(PYTHON) prototypes/crossing-prototype/measure.py
+	$(PYTHON) -c "import webbrowser,pathlib; webbrowser.open(pathlib.Path('prototypes/crossing-prototype/index.html').resolve().as_uri())"
 
 clean:
 	rm -rf build dist *.egg-info src/*.egg-info .pytest_cache
