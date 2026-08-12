@@ -1,23 +1,23 @@
 {
   "name": "Textbook max-flow (unit Day 2)",
-  "description": "The six-node worked example from the flow-networks unit. Edmonds-Karp finds maximum flow 14 (s->A->C->t pushes 4, s->B->D->t pushes 9, then s->A->D->t rebalances 1 across the residual A->D edge). The minimum cut also has capacity 14, certifying optimality. Modeled here with s as the sole supply and t as the sole demand; supply/demand quantities are set high so the lane capacities are what bind.",
+  "description": "The six-node worked example from the flow-networks unit, authored so that Edmonds-Karp is forced to undo one of its own decisions. Iteration 1 pushes 3 along s->A->B->t and iteration 2 pushes 2 along s->C->B->t; with no forward path left, iteration 3 walks the residual graph s->C->B->A->D->t, traversing the backward arc B->A and cancelling 2 of the 3 units it had committed to A->B. Maximum flow 7; the minimum cut {B->t, A->D} also has capacity 7, certifying optimality. s is the sole supply and t the sole demand, with quantities set high so the lane capacities are what bind. NOTE: the order of the edges array is load-bearing -- see below.",
   "network": {
     "nodes": [
-      { "id": "s", "kind": "supply", "quantity": 20, "label": "source" },
-      { "id": "A", "kind": "transit" },
-      { "id": "B", "kind": "transit" },
-      { "id": "C", "kind": "transit" },
-      { "id": "D", "kind": "transit" },
-      { "id": "t", "kind": "demand", "quantity": 20, "label": "sink" }
+      { "id": "s", "kind": "supply", "quantity": 20, "label": "source", "x": 130, "y": 360 },
+      { "id": "A", "kind": "transit", "x": 380, "y": 200 },
+      { "id": "B", "kind": "transit", "x": 640, "y": 520 },
+      { "id": "C", "kind": "transit", "x": 380, "y": 520 },
+      { "id": "D", "kind": "transit", "x": 640, "y": 200 },
+      { "id": "t", "kind": "demand", "quantity": 20, "label": "sink", "x": 860, "y": 360 }
     ],
     "edges": [
-      { "src": "s", "dst": "A", "cap": 10, "cost": 1 },
-      { "src": "s", "dst": "B", "cap": 10, "cost": 1 },
-      { "src": "A", "dst": "C", "cap": 4,  "cost": 1 },
-      { "src": "A", "dst": "D", "cap": 2,  "cost": 1 },
-      { "src": "B", "dst": "D", "cap": 9,  "cost": 1 },
-      { "src": "C", "dst": "t", "cap": 10, "cost": 1 },
-      { "src": "D", "dst": "t", "cap": 10, "cost": 1 }
+      { "src": "s", "dst": "A", "cap": 3, "cost": 1 },
+      { "src": "A", "dst": "B", "cap": 3, "cost": 1 },
+      { "src": "B", "dst": "t", "cap": 5, "cost": 1 },
+      { "src": "s", "dst": "C", "cap": 5, "cost": 1 },
+      { "src": "C", "dst": "B", "cap": 6, "cost": 1 },
+      { "src": "A", "dst": "D", "cap": 2, "cost": 1 },
+      { "src": "D", "dst": "t", "cap": 4, "cost": 1 }
     ]
   },
   "threat_pictures": {}

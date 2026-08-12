@@ -163,7 +163,7 @@ Each day's idea has a concrete home in the code you can run and read.
 | unit | idea | in this repo |
 |------|------|--------------|
 | **Day 1** | shortest path is the wrong model once capacity binds | `routing.py` (`cheapest_path` / `safest_path`) is the "first instinct"; the capacity-limited sample theater shows why it collapses |
-| **Day 2** | Ford–Fulkerson / **Edmonds–Karp** max-flow on a residual graph | `maxflow.py` (BFS augmenting paths, explicit residual arcs); reproduces the unit's worked example exactly: `clopt maxflow --data data/textbook_maxflow.json` returns **14** |
+| **Day 2** | Ford–Fulkerson / **Edmonds–Karp** max-flow on a residual graph | `maxflow.py` (BFS augmenting paths, explicit residual arcs); reproduces the unit's worked example exactly: `clopt maxflow --data data/textbook_maxflow.json` returns **7** |
 | **Day 3** | **Max-Flow Min-Cut**: the cut is a certificate of optimality | `throughput.py` extracts the witness cut; `clopt maxflow` prints the lanes that prove no plan moves more |
 | **Day 4** | **interdiction** - polynomial min-cut vs. NP-hard budget version | `interdiction.py`: `min_cut_interdiction` (polynomial) and `budget_interdiction` (exhaustive optimum *and* greedy heuristic, with the combinatorial subset count surfaced) |
 | *sequel* | cost-aware flow the unit sets up but doesn't cover | `mincostflow.py` + `solver.py`: risk-blended **min-cost flow**, the cost/risk Pareto frontier |
@@ -175,7 +175,7 @@ flips interdiction from milliseconds to NP-hard.
 
 ```bash
 # Day 2-3: max throughput + the min-cut certificate
-clopt maxflow   --data data/textbook_maxflow.json     # -> 14, witness cut = 14
+clopt maxflow   --data data/textbook_maxflow.json     # -> 7, witness cut = 7
 clopt maxflow   --data data/theater_sample.json
 
 # Day 2, live in class: print each augmentation + residual graph (incl. reverse arcs)
@@ -287,12 +287,12 @@ src/clopt/
   api.py          # FastAPI app
 data/
   theater_sample.json    # synthetic-but-plausible scenario + threat pictures
-  textbook_maxflow.json  # the unit's Day 2 worked example (max flow = 14)
+  textbook_maxflow.json  # the unit's Day 2 worked example (max flow = 7)
 tests/
   test_mincostflow.py        # hand-verified optima + flow invariants
   test_routing.py            # cheapest vs safest path behavior
   test_solver.py             # end-to-end fill/cost/risk + disruptions + Pareto
-  test_maxflow_interdiction.py  # Edmonds-Karp = 14, min-cut certificate, interdiction
+  test_maxflow_interdiction.py  # Edmonds-Karp = 7, min-cut certificate, interdiction
 docs/
   DESIGN_WALKTHROUGH.md  # how and in what order the repo was built, and why
 ```
