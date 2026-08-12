@@ -120,8 +120,12 @@ kbd { background:#1a2029; border:1px solid #2a3240; border-radius:3px;
 /* -- Z: z-order only.  The current #10 behaviour, drawn for comparison. --- */
 .v-Z { }
 
-/* -- K: knockout casing at the 8 solved crossings only. ------------------ */
+/* -- K: RESOLVED.  Casing on the annotation tier only - never lane-over-lane.
+      0 marks on the pristine screen, 2 on the path beat, 7 on the cut beat. */
 .v-K { --casing-op: 1; }
+
+/* -- X: the same casing at all 8 crossings, lane-over-lane included. ----- */
+.v-X { --casing-op: 1; }
 
 /* -- G: casing along every lane's whole length.  No crossing solver at all,
       which is the cheapest possible implementation - and the variant that
@@ -192,7 +196,7 @@ svg { background: var(--bg); display:block; }
       <select id="preset">
         <option value="pristine">Pristine (the opening screen)</option>
         <option value="flowcut">Flow &amp; Cut (Day 2/3)</option>
-        <option value="path">Augmenting path only</option>
+        <option value="path" selected>Augmenting path only</option>
         <option value="naive">Naive load (Day 1)</option>
       </select></label>
     <label>projector
@@ -328,13 +332,22 @@ const VARIANTS = {
             "and what the frontend gets for free. Judge every other variant "+
             "against this one, not against an imagined failure.",
       cost:"Costs nothing. The question is whether it fails."},
-  K: {name:"K - knockout casing at crossings",
-      blurb:"Each of the 8 crossings is solved at load, and the over-mark carries "+
-            "a short background-coloured casing there, drawn beneath its own "+
-            "stroke and above the mark it crosses. The under-lane visibly breaks. "+
-            "Width 14 = #17's legible gap, unchanged.",
+  K: {name:"K - annotation-tier knockout  [RESOLVED]",
+      blurb:"A background-coloured casing wherever an ANNOTATION crosses a lane - "+
+            "never lane-over-lane. Width 14 = #17's legible gap, unchanged. The "+
+            "pristine screen gets nothing, because nothing is being traced there; "+
+            "the path beat gets 2 marks and the cut beat 7. This is what #23 "+
+            "resolved to.",
       cost:"Costs a crossing solver at load (a sibling of #17's anchor solver) "+
-           "and a per-crossing DOM node. Spends no hue and no glyph."},
+           "and one DOM node per live crossing. Spends no hue and no glyph, and "+
+           "fits inside the lane band #17 already reserved."},
+  X: {name:"X - knockout at every crossing",
+      blurb:"The same casing, but applied lane-over-lane as well, so all 8 "+
+            "crossings break on every screen. More consistent - and it spends 8 "+
+            "marks on the pristine opening screen, which is the one picture where "+
+            "nobody is tracing anything.",
+      cost:"Same solver, more marks. Rejected: it pays on the screen where the "+
+           "evidence says crossings cost nothing."},
   G: {name:"G - casing along every lane (no solver)",
       blurb:"The same casing, but applied to every mark along its entire length "+
             "rather than only at solved crossings. The cheapest possible "+
@@ -431,9 +444,9 @@ const CROSSINGS = (() => {
 /* ======================================================================
    RENDER
    ====================================================================== */
-let variant = new URLSearchParams(location.search).get("variant") || "Z";
-if (!KEYS.includes(variant)) variant = "Z";
-let preset = "pristine";
+let variant = new URLSearchParams(location.search).get("variant") || "K";
+if (!KEYS.includes(variant)) variant = "K";
+let preset = "path";
 let active = new Set(PRESETS[preset]);
 
 /* a casing segment: a short stub of the OVER mark, centred on the crossing,
@@ -487,8 +500,9 @@ function build() {
     /* G: the whole lane is cased, no crossing geometry consulted */
     if (variant === "G")
       gLanes.appendChild(mk("line",{...s, class:"casing"}));
-    /* K / H: only the crossings this lane is the OVER mark of */
-    if (variant === "K" || variant === "H")
+    /* X / H: lane-over-lane casings.  K deliberately has NONE - its casings
+       live on the annotation tier below, which is #23's resolution. */
+    if (variant === "X" || variant === "H")
       for (const c of CROSSINGS) {
         if (c.over !== e.id) continue;
         const len = casingW / Math.sin(c.theta*Math.PI/180) + 2;
@@ -496,7 +510,8 @@ function build() {
       }
     gLanes.appendChild(mk("line",{...s, class:"lane", "data-e":e.id}));
   }
-  /* H's hop: an arc on the OVER lane, sitting in the hole its casing opened */
+  /* H's hop: an arc on the OVER lane, sitting in the hole its casing opened.
+     Rejected - it costs #5 the curved-path renderer #17 already declined. */
   if (variant === "H")
     for (const c of CROSSINGS) {
       const s = LANESEG[c.over];

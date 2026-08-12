@@ -45,12 +45,14 @@ the casing width lands where it does.
 | | Variant | The bet |
 |---|---|---|
 | **Z** | z-order only | Nothing. Annotations paint over lanes and that is all. What #10 already specifies, and what the frontend gets for free. |
-| **K** | knockout casing at crossings | The over-mark carries a short background-coloured casing at each solved crossing, so the under-lane visibly breaks. |
+| **K** | annotation-tier knockout | **Resolved.** A 14-unit background-coloured casing wherever an *annotation* crosses a lane — never lane-over-lane. |
+| **X** | knockout at every crossing | The same casing applied lane-over-lane too, so all 8 break on every screen. Rejected: it pays on the pristine screen, where nobody is tracing anything. |
 | **G** | casing along every lane | Same mark, no crossing solver at all — the cheapest possible implementation. Turn on the min-cut layer to see the bill. |
-| **H** | bridge / hop | The under-lane breaks *and* the over-lane arcs, the way a road atlas draws an overpass. |
+| **H** | bridge / hop | The under-lane breaks *and* the over-lane arcs, the way a road atlas draws an overpass. Rejected: costs #5 the curved-path renderer #17 already declined. |
 
-Judge K, G and H against **Z**, not against an imagined failure. Z is the
-baseline and it may well be the answer.
+The page opens on **K**, on the augmenting-path beat — the two crossings the
+decision is actually about. Judge the rest against **Z**, not against an
+imagined failure; Z was a live candidate throughout.
 
 Every control is URL-addressable —
 `?variant=K&env=washed&cvd=deutan&dist=back&preset=flowcut&cw=14` — so a
