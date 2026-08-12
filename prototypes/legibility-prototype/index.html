@@ -1,0 +1,1104 @@
+<meta charset="utf-8">
+<title>Projector legibility prototype - wayfinder #10</title>
+<!--
+  THROWAWAY PROTOTYPE - wayfinder ticket #10.
+  "What survives a washed-out classroom projector, and what does that rule out
+   of the layer catalog?"
+
+  Three RADICALLY different encoding schemes for the ten-layer catalog (#3),
+  drawn over the real theater with the authored coordinates from #4, under the
+  rendering rules from #5 (hand-written SVG, fixed viewBox, all appearance in a
+  :root token block, JS sets geometry/text/classes only).
+
+    A - Hue-primary      : colour carries every categorical distinction. The
+                           scheme you get if you don't think about the room.
+    B - Redundant        : every distinction on >=2 channels (colour + dash +
+                           weight + glyph), Okabe-Ito safe palette, plated text.
+    C - Sparse           : refuses to make ten layers legible at once. Inactive
+                           marks drop to a scaffold tier; numerals leave the
+                           lanes for a ledger. Structural, not just tokens.
+
+  Instrumentation (the #4-drift-equivalent - measured, not vibes):
+    * projector environment  - black-lift + desaturation, the real failure mode
+    * colour-vision sim      - Machado deutan / protan / tritan / achromatopsia
+    * viewing distance       - scale-down + acuity blur ("back row")
+    * contrast readout       - WCAG ratio per token AFTER the environment
+                               transform, flagged against 4.5:1 text / 3:1 graphic
+
+  No build step, no network fetch, no dependencies - open the file.
+  Not production code: no tests, no error handling, no abstractions.
+-->
+<style>
+/* ========================================================================
+   CHROME - the instrument panel. Deliberately styled unlike the diagram so
+   it is obviously not part of what is being judged.
+   ======================================================================== */
+* { box-sizing: border-box; }
+body { margin:0; background:#0d1117; color:#e8edf4;
+       font:13px/1.45 ui-sans-serif,system-ui,"Segoe UI",sans-serif; }
+header { padding:10px 16px 8px; border-bottom:1px solid #232b36; }
+h1 { font-size:14px; margin:0 0 8px; font-weight:600; letter-spacing:.02em; }
+.row { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+.row + .row { margin-top:7px; }
+label { color:#8b97a8; display:flex; gap:5px; align-items:center; white-space:nowrap; }
+select, button { background:#1a2029; color:#e8edf4; border:1px solid #2a3240;
+                 border-radius:5px; padding:3px 7px; font:inherit; }
+button { cursor:pointer; }
+button.on { background:#2d4a7c; border-color:#3f6ba8; }
+main { display:flex; height:calc(100vh - 118px); }
+#stagewrap { flex:1; min-width:0; display:flex; align-items:center;
+             justify-content:center; overflow:hidden; background:#000; }
+#stage { transform-origin:center center; }
+aside { width:330px; border-left:1px solid #232b36; padding:12px 14px;
+        overflow-y:auto; background:#0d1117; }
+aside h2 { font-size:11px; text-transform:uppercase; letter-spacing:.09em;
+           color:#8b97a8; margin:14px 0 6px; font-weight:600; }
+aside h2:first-child { margin-top:0; }
+.blurb { color:#a9b4c4; font-size:12px; margin:0 0 4px; }
+table { width:100%; border-collapse:collapse; font-size:11px; }
+th,td { text-align:left; padding:2px 4px; border-bottom:1px solid #1b222c; }
+th { color:#8b97a8; font-weight:500; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+.pass { color:#5fd18a; } .warn { color:#e8c15f; } .fail { color:#f2705f; }
+.layers { display:grid; grid-template-columns:1fr; gap:2px; }
+.layers label { font-size:12px; color:#c6cfdb; cursor:pointer; }
+.hint { color:#6c7789; font-size:11px; margin-top:8px; line-height:1.4; }
+kbd { background:#1a2029; border:1px solid #2a3240; border-radius:3px;
+      padding:0 4px; font:11px ui-monospace,monospace; }
+#switcher { position:fixed; bottom:14px; left:50%; transform:translateX(-50%);
+            display:flex; gap:10px; align-items:center; background:#e8edf4;
+            color:#0d1117; border-radius:999px; padding:6px 8px; z-index:50;
+            box-shadow:0 4px 20px rgba(0,0,0,.6); font-weight:600; font-size:13px; }
+#switcher button { background:#0d1117; color:#e8edf4; border:none;
+                   border-radius:999px; width:26px; height:26px; padding:0; }
+#vname { min-width:250px; text-align:center; }
+
+/* ========================================================================
+   THE DIAGRAM. Everything below is the artifact under test.
+
+   Rule from #5, obeyed literally here: JS sets geometry attributes, text
+   content and classes. It never sets an appearance property. Every appearance
+   value is a custom property, and the three variants are three VALUE SETS over
+   ONE NAME LIST - which is the shape #10's deliverable is supposed to have.
+   Variant C additionally changes structure (see .v-C rules at the end), which
+   is precisely the finding that a variant can cost more than a retune.
+   ======================================================================== */
+:root {
+  --bg:              #0b0e13;
+
+  --node-supply:     #3b6ea5;
+  --node-transit:    #46505e;
+  --node-demand:     #7a5230;
+  --node-stroke:     #cdd6e2;
+  --node-w:          2;
+  --node-r:          26;
+  --node-label:      15;
+  --node-ink:        #ffffff;
+  --node-sub:        11;
+
+  --lane:            #9aa7b8;
+  --lane-w:          3;
+  --lane-dash:       none;
+
+  --synth:           #6f7b8c;      /* super-source / super-sink machinery */
+  --synth-w:         2;
+  --synth-dash:      6 6;
+  --synth-node:      #22303f;
+
+  --residual:        #4d8fd6;      /* residual + reverse arcs (Day 2) */
+  --residual-w:      2;
+  --residual-dash:   none;
+  --residual-op:     1;
+
+  --path:            #f2c94c;      /* augmenting path + bottleneck */
+  --path-w:          7;
+  --path-op:         1;
+
+  --cut:             #e0553f;      /* the min-cut line itself */
+  --cut-w:           5;
+  --cut-dash:        none;
+  --cut-s-fill:      rgba(59,110,165,.20);
+  --cut-t-fill:      rgba(224,85,63,.20);
+
+  --removed:         #b04a3a;      /* removed / interdicted lanes */
+  --removed-w:       3;
+  --removed-dash:    none;
+  --removed-op:      .45;
+  --removed-glyph:   0;            /* 0 = no glyph, 1 = draw the X */
+
+  --overlay:         #59c08b;      /* single cheapest/safest path overlay */
+  --overlay-w:       6;
+
+  --naive:           #cf5fbb;      /* naive routing load */
+  --naive-w:         4;
+  --violation:       #e0553f;      /* over-capacity lane */
+  --violation-w:     6;
+  --violation-glyph: 0;
+
+  --label:           12;           /* cap / cost / risk numerals */
+  --label-ink:       #c8d2e0;
+  --plate-fill:      none;         /* plate behind text */
+  --plate-op:        0;
+  --plate-pad:       0;
+  --flow:            14;           /* flow-on-edge numerals */
+  --flow-ink:        #ffffff;
+  --scaffold-op:     1;            /* variant C dims everything inactive */
+}
+
+/* ---------------------------------------------------------------- A ----- */
+/* Hue-primary. One channel does all the work. Thin, unplated, flat fills.   */
+.v-A { /* the values above ARE variant A - it is the baseline strawman */ }
+
+/* ---------------------------------------------------------------- B ----- */
+/* Redundant channel. Okabe-Ito categorical palette (colour-blind safe),
+   every distinction also carried by dash pattern, stroke weight or a glyph,
+   text plated so it never sits on a stroke.                                */
+.v-B {
+  --bg:              #07090d;
+  --node-supply:     #0072b2;
+  --node-transit:    #3a4653;
+  --node-demand:     #d55e00;
+  --node-stroke:     #ffffff;
+  --node-w:          3;
+  --node-r:          30;
+  --node-label:      17;
+  --node-sub:        12;
+
+  --lane:            #dfe6ef;
+  --lane-w:          4.5;
+
+  --synth:           #8d99a8;
+  --synth-w:         3;
+  --synth-dash:      2 9;          /* dotted, not dashed - a different register */
+
+  --residual:        #56b4e9;
+  --residual-w:      3;
+  --residual-dash:   11 6;         /* dashed AND offset AND hollow-headed */
+
+  --path:            #f0e442;
+  --path-w:          11;
+
+  --cut:             #cc79a7;
+  --cut-w:           7;
+  --cut-dash:        16 8;
+  --cut-s-fill:      url(#hatchS);  /* pattern, not tint - survives washout */
+  --cut-t-fill:      url(#hatchT);
+
+  --removed:         #999999;       /* removal reads as ABSENT, not as red */
+  --removed-w:       3;
+  --removed-dash:    3 7;
+  --removed-op:      .55;
+  --removed-glyph:   1;             /* the X is what actually says "gone" */
+
+  --overlay:         #009e73;
+  --overlay-w:       9;
+
+  --naive:           #cc79a7;
+  --naive-w:         6;
+  --violation:       #d55e00;
+  --violation-w:     11;
+  --violation-glyph: 1;             /* doubled outline + "!" badge */
+
+  --label:           15;
+  --label-ink:       #ffffff;
+  --plate-fill:      #07090d;
+  --plate-op:        .88;
+  --plate-pad:       3;
+  --flow:            19;
+  --flow-ink:        #ffffff;
+}
+
+/* ---------------------------------------------------------------- C ----- */
+/* Sparse. Same safe palette, but the bet is DENSITY, not encoding: anything
+   not on the active layer collapses to a scaffold tier, and cap/cost/risk
+   numerals leave the canvas for the side ledger.                            */
+.v-C {
+  --bg:              #07090d;
+  --node-supply:     #0072b2;
+  --node-transit:    #2b333d;
+  --node-demand:     #d55e00;
+  --node-stroke:     #e8edf4;
+  --node-w:          2.5;
+  --node-r:          30;
+  --node-label:      18;
+  --node-sub:        12;
+
+  --lane:            #6b7683;       /* base lanes are SCAFFOLD, deliberately quiet */
+  --lane-w:          2.5;
+
+  --synth:           #4a5460;
+  --synth-w:         2;
+  --synth-dash:      2 9;
+
+  --residual:        #56b4e9;
+  --residual-w:      4;
+  --residual-dash:   11 6;
+
+  --path:            #f0e442;
+  --path-w:          13;
+
+  --cut:             #cc79a7;
+  --cut-w:           8;
+  --cut-dash:        16 8;
+  --cut-s-fill:      rgba(0,114,178,.28);
+  --cut-t-fill:      rgba(213,94,0,.28);
+
+  --removed:         #6b7683;
+  --removed-w:       2.5;
+  --removed-dash:    3 7;
+  --removed-op:      .5;
+  --removed-glyph:   1;
+
+  --overlay:         #009e73;
+  --overlay-w:       11;
+
+  --naive:           #cc79a7;
+  --naive-w:         7;
+  --violation:       #d55e00;
+  --violation-w:     13;
+  --violation-glyph: 1;
+
+  --label:           17;
+  --label-ink:       #ffffff;
+  --plate-fill:      #07090d;
+  --plate-op:        .9;
+  --plate-pad:       4;
+  --flow:            24;            /* very large, because there are few of them */
+  --flow-ink:        #ffffff;
+  --scaffold-op:     .30;
+}
+
+/* ------------------------------------------------------- element rules --- */
+svg { background: var(--bg); display:block; }
+
+.lane        { stroke:var(--lane); stroke-width:var(--lane-w);
+               stroke-dasharray:var(--lane-dash); fill:none;
+               marker-end:url(#ah); }
+.synth       { stroke:var(--synth); stroke-width:var(--synth-w);
+               stroke-dasharray:var(--synth-dash); fill:none;
+               marker-end:url(#ah); }
+.node        { stroke:var(--node-stroke); stroke-width:var(--node-w); }
+.node.supply  { fill:var(--node-supply); }
+.node.transit { fill:var(--node-transit); }
+.node.demand  { fill:var(--node-demand); }
+.node.synthnode { fill:var(--synth-node); stroke:var(--synth);
+                  stroke-dasharray:var(--synth-dash); }
+.nlabel      { fill:var(--node-ink); font-size:calc(var(--node-label) * 1px);
+               font-weight:700; text-anchor:middle; }
+.nsub        { fill:var(--node-ink); font-size:calc(var(--node-sub) * 1px);
+               text-anchor:middle; opacity:.82; }
+
+.residual    { stroke:var(--residual); stroke-width:var(--residual-w);
+               stroke-dasharray:var(--residual-dash); fill:none;
+               opacity:var(--residual-op); marker-end:url(#ah-hollow); }
+.path        { stroke:var(--path); stroke-width:var(--path-w); fill:none;
+               opacity:var(--path-op); stroke-linecap:round; }
+.cutline     { stroke:var(--cut); stroke-width:var(--cut-w);
+               stroke-dasharray:var(--cut-dash); fill:none; stroke-linecap:round; }
+.sside       { fill:var(--cut-s-fill); }
+.tside       { fill:var(--cut-t-fill); }
+.removed     { stroke:var(--removed) !important; stroke-width:var(--removed-w) !important;
+               stroke-dasharray:var(--removed-dash) !important;
+               opacity:var(--removed-op); marker-end:none; }
+.removed-x   { stroke:var(--removed); stroke-width:calc(var(--removed-w) * 1.2);
+               opacity:calc(var(--removed-glyph) * 1); stroke-linecap:round; }
+.overlay     { stroke:var(--overlay); stroke-width:var(--overlay-w); fill:none;
+               stroke-linecap:round; }
+.naive       { stroke:var(--naive); stroke-width:var(--naive-w); fill:none; }
+.violation   { stroke:var(--violation); stroke-width:var(--violation-w); fill:none; }
+.violation-outer { stroke:var(--violation); stroke-width:calc(var(--violation-w) * 2);
+               fill:none; opacity:calc(var(--violation-glyph) * .35); }
+.vbadge      { opacity:calc(var(--violation-glyph) * 1); }
+.vbadge circle { fill:var(--violation); stroke:#fff; stroke-width:2; }
+.vbadge text   { fill:#fff; font-size:20px; font-weight:900; text-anchor:middle; }
+
+.elabel      { fill:var(--label-ink); font-size:calc(var(--label) * 1px);
+               text-anchor:middle; font-variant-numeric:tabular-nums; }
+.plate       { fill:var(--plate-fill); opacity:var(--plate-op); }
+.flowlabel   { fill:var(--flow-ink); font-size:calc(var(--flow) * 1px);
+               font-weight:700; text-anchor:middle;
+               font-variant-numeric:tabular-nums; }
+
+/* layer visibility - a root class per layer, exactly as #5 specifies */
+.l-cap, .l-costrisk, .l-flow, .l-residual, .l-path, .l-cut,
+.l-removed, .l-overlay, .l-naive { display:none; }
+.show-cap      .l-cap      { display:block; }
+.show-costrisk .l-costrisk { display:block; }
+.show-flow     .l-flow     { display:block; }
+.show-residual .l-residual { display:block; }
+.show-path     .l-path     { display:block; }
+.show-cut      .l-cut      { display:block; }
+.show-removed  .l-removed  { display:block; }
+.show-overlay  .l-overlay  { display:block; }
+.show-naive    .l-naive    { display:block; }
+
+/* --- variant C's structural move: scaffold everything not on an active
+       annotation, and suppress cap/cost/risk numerals on the canvas --- */
+.v-C .lane          { opacity:var(--scaffold-op); }
+.v-C .lane.hot      { opacity:1; stroke:var(--lane); stroke-width:4.5; }
+.v-C .synth         { opacity:var(--scaffold-op); }
+.v-C .node          { opacity:.9; }
+.v-C .node.cold     { opacity:var(--scaffold-op); }
+.v-C .l-cap,
+.v-C .l-costrisk    { display:none !important; }   /* they live in the ledger */
+</style>
+
+<header>
+  <h1>Projector legibility of the layer catalog &mdash; wayfinder #10 &mdash; THROWAWAY PROTOTYPE</h1>
+  <div class="row">
+    <label>dataset
+      <select id="ds"><option value="theater">Archipelago theater</option>
+                      <option value="textbook">Textbook max-flow</option></select></label>
+    <label>view preset
+      <select id="preset">
+        <option value="flowcut">Flow &amp; Cut</option>
+        <option value="interdiction">Interdiction</option>
+        <option value="costrisk">Cost &amp; Risk</option>
+        <option value="worst">WORST CASE (everything on)</option>
+      </select></label>
+    <label>projector
+      <select id="env">
+        <option value="ideal">ideal (dark room, good unit)</option>
+        <option value="typical" selected>typical classroom</option>
+        <option value="washed">washed out (lights on, cheap unit)</option>
+      </select></label>
+  </div>
+  <div class="row">
+    <label>colour vision
+      <select id="cvd">
+        <option value="none">normal</option>
+        <option value="deutan">deuteranopia (~6% of men)</option>
+        <option value="protan">protanopia</option>
+        <option value="tritan">tritanopia</option>
+        <option value="achroma">achromatopsia / greyscale</option>
+      </select></label>
+    <label>viewing distance
+      <select id="dist">
+        <option value="front">front row (100%)</option>
+        <option value="mid">mid room (55% + acuity blur)</option>
+        <option value="back">back row (32% + acuity blur)</option>
+      </select></label>
+    <button id="stress">stress test &rarr; washed + deutan + back row</button>
+  </div>
+</header>
+
+<main>
+  <div id="stagewrap"><div id="stage"></div></div>
+  <aside>
+    <h2>Variant</h2>
+    <p class="blurb" id="blurb"></p>
+
+    <h2>Layers <span style="font-weight:400;text-transform:none;letter-spacing:0">(the #3 catalog)</span></h2>
+    <div class="layers" id="layers"></div>
+
+    <h2>Measured contrast <span style="font-weight:400;text-transform:none;letter-spacing:0">after projector transform</span></h2>
+    <table id="contrast"><tbody></tbody></table>
+    <p class="hint">WCAG ratio against the diagram background, computed after the
+      selected environment's black-lift and desaturation are applied numerically.
+      Threshold: <span class="pass">4.5</span> for numerals, <span class="warn">3.0</span>
+      for strokes and fills.</p>
+
+    <h2>Type size at distance</h2>
+    <table id="typesize"><tbody></tbody></table>
+
+    <h2 id="ledgerhead" style="display:none">Ledger <span style="font-weight:400;text-transform:none;letter-spacing:0">(variant C)</span></h2>
+    <table id="ledger"><tbody></tbody></table>
+
+    <p class="hint"><kbd>&larr;</kbd> <kbd>&rarr;</kbd> switch variant &middot;
+      <kbd>1</kbd>&ndash;<kbd>4</kbd> view preset &middot; <kbd>s</kbd> stress test</p>
+  </aside>
+</main>
+
+<div id="switcher">
+  <button id="prev">&larr;</button><span id="vname"></span><button id="next">&rarr;</button>
+</div>
+
+<script type="module">
+/* ======================================================================
+   DATA - inlined. Authored coordinates lifted verbatim from the #4 layout
+   prototype so this draws the SAME picture that decision settled on.
+   x is shifted +60 to make room for the synthetic S / T at the extremes.
+   ====================================================================== */
+const SHIFT = 60, W = 1060, H = 720;
+
+const DATA = {
+  theater: {
+    name: "Archipelago Resupply (sample)",
+    nodes: [
+      {id:"HUB-ALPHA", kind:"supply",  q:120, x:110, y:250},
+      {id:"HUB-BRAVO", kind:"supply",  q:60,  x:110, y:540},
+      {id:"LANE-J1",   kind:"transit",        x:360, y:190},
+      {id:"STRAIT-3",  kind:"transit",        x:360, y:400},
+      {id:"LANE-J2",   kind:"transit",        x:360, y:590},
+      {id:"AIRHEAD-7", kind:"transit",        x:600, y:120},
+      {id:"FOB-KILO",  kind:"demand",  q:70,  x:830, y:270},
+      {id:"FOB-LIMA",  kind:"demand",  q:50,  x:830, y:450},
+      {id:"FOB-MIKE",  kind:"demand",  q:40,  x:830, y:630}
+    ],
+    edges: [
+      {id:"e00", src:"HUB-ALPHA", dst:"LANE-J1",   cap:120, cost:4, risk:.05},
+      {id:"e01", src:"HUB-ALPHA", dst:"STRAIT-3",  cap:80,  cost:2, risk:.45},
+      {id:"e02", src:"HUB-BRAVO", dst:"LANE-J2",   cap:60,  cost:3, risk:.15},
+      {id:"e03", src:"LANE-J1",   dst:"LANE-J2",   cap:90,  cost:3, risk:.10},
+      {id:"e04", src:"LANE-J1",   dst:"AIRHEAD-7", cap:40,  cost:6, risk:.05},
+      {id:"e05", src:"LANE-J1",   dst:"FOB-KILO",  cap:60,  cost:6, risk:.08},
+      {id:"e06", src:"STRAIT-3",  dst:"FOB-KILO",  cap:80,  cost:2, risk:.40},
+      {id:"e07", src:"LANE-J2",   dst:"FOB-KILO",  cap:50,  cost:4, risk:.12},
+      {id:"e08", src:"LANE-J2",   dst:"FOB-LIMA",  cap:50,  cost:5, risk:.18},
+      {id:"e09", src:"LANE-J2",   dst:"FOB-MIKE",  cap:30,  cost:7, risk:.30},
+      {id:"e10", src:"AIRHEAD-7", dst:"FOB-LIMA",  cap:25,  cost:8, risk:.03},
+      {id:"e11", src:"AIRHEAD-7", dst:"FOB-MIKE",  cap:25,  cost:9, risk:.04}
+    ],
+    /* Plausible annotation state, dense on purpose. Naive numbers are the ones
+       the map already records (#3 / #9): BRAVO->J2 loads 90 against cap 60,
+       J2->MIKE loads 40 against cap 30. */
+    flow: {e00:80,e01:80,e02:60,e03:40,e04:25,e05:60,e06:80,e07:0,e08:50,e09:30,e10:25,e11:0},
+    residual: ["e03","e05","e08","e02","e01"],
+    path:     ["S","HUB-ALPHA","LANE-J1","LANE-J2","FOB-MIKE","T"],
+    bottleneck: {edge:"e09", value:30},
+    cutEdges: ["e05","e06","e07"],
+    sSide: ["HUB-ALPHA","HUB-BRAVO","LANE-J1","LANE-J2","STRAIT-3","AIRHEAD-7"],
+    removed: ["e01","e09"],
+    overlayPath: ["HUB-ALPHA","STRAIT-3","FOB-KILO"],
+    naiveLoad: {e02:90,e09:40,e00:70,e05:70,e03:90},
+    violations: ["e02","e09"]
+  },
+  textbook: {
+    name: "Textbook max-flow (unit Day 2)",
+    nodes: [
+      {id:"s", kind:"supply", q:20, x:130, y:360},
+      {id:"A", kind:"transit",      x:380, y:200},
+      {id:"B", kind:"transit",      x:380, y:520},
+      {id:"C", kind:"transit",      x:640, y:200},
+      {id:"D", kind:"transit",      x:640, y:520},
+      {id:"t", kind:"demand", q:20, x:860, y:360}
+    ],
+    edges: [
+      {id:"e00", src:"s", dst:"A", cap:10, cost:1, risk:0},
+      {id:"e01", src:"s", dst:"B", cap:10, cost:1, risk:0},
+      {id:"e02", src:"A", dst:"C", cap:4,  cost:1, risk:0},
+      {id:"e03", src:"A", dst:"D", cap:2,  cost:1, risk:0},
+      {id:"e04", src:"B", dst:"D", cap:9,  cost:1, risk:0},
+      {id:"e05", src:"C", dst:"t", cap:10, cost:1, risk:0},
+      {id:"e06", src:"D", dst:"t", cap:10, cost:1, risk:0}
+    ],
+    flow: {e00:6,e01:9,e02:4,e03:2,e04:9,e05:4,e06:11},
+    residual: ["e00","e01","e02","e03","e04","e05","e06"],
+    path: ["S","s","A","D","t","T"],
+    bottleneck: {edge:"e03", value:2},
+    cutEdges: ["e02","e06"],
+    sSide: ["s","A","B","D"],
+    removed: ["e02"],
+    overlayPath: ["s","B","D","t"],
+    naiveLoad: {e00:12,e02:6},
+    violations: ["e00","e02"]
+  }
+};
+
+/* synthetic super-source / super-sink, drawn as machinery (#3) */
+const SYN = { S:{x:30 - SHIFT, y:H/2}, T:{x:1000 - SHIFT, y:H/2} };
+
+/* ======================================================================
+   VARIANTS
+   ====================================================================== */
+const VARIANTS = {
+  A: {name:"Hue-primary (strawman)",
+      blurb:"Colour alone carries every categorical distinction: residual is blue, "+
+            "cut is red, violation is red, overlay is green. Thin strokes, small "+
+            "unplated numerals sitting directly on the lanes, flat translucent "+
+            "S-side / T-side tints. This is the scheme you get by default. Flip "+
+            "to deuteranopia and watch removed / cut / violation become one colour."},
+  B: {name:"Redundant channel (belt and braces)",
+      blurb:"Okabe-Ito palette, and no distinction rests on hue alone: residual is "+
+            "dashed AND offset AND hollow-headed, synthetic arcs are dotted (a "+
+            "different register from dashed), removal is grey + an X rather than "+
+            "red, violations get a doubled outline and a ! badge, S-side / T-side "+
+            "are hatch patterns rather than tints. Every numeral sits on an opaque "+
+            "plate. Full density retained - the bet is that encoding harder wins."},
+  C: {name:"Sparse (cut the density instead)",
+      blurb:"Same safe palette, opposite bet. Refuses to make ten layers legible "+
+            "at once: base lanes drop to a 30% scaffold and only the lanes the "+
+            "current annotation touches come up to full strength; cap/cost/risk "+
+            "numerals leave the canvas entirely for a side ledger; flow numerals "+
+            "are enormous because there are few of them. Answers the ticket's "+
+            "'does the catalog need trimming or a dense/sparse mode' directly."}
+};
+const KEYS = Object.keys(VARIANTS);
+
+const LAYERS = [
+  ["cap",      "capacity labels"],
+  ["costrisk", "cost / risk labels"],
+  ["flow",     "flow on edges"],
+  ["residual", "residual arcs (incl. reverse)"],
+  ["path",     "augmenting path + bottleneck"],
+  ["cut",      "min-cut + S/T shading"],
+  ["removed",  "removed / interdicted lanes"],
+  ["overlay",  "single-path overlay"],
+  ["naive",    "naive routing + violations"]
+];
+const PRESETS = {
+  flowcut:      ["cap","flow","residual","path","cut"],
+  interdiction: ["cap","flow","cut","removed"],
+  costrisk:     ["costrisk","flow","overlay","naive"],
+  worst:        LAYERS.map(l => l[0])
+};
+
+/* ======================================================================
+   ENVIRONMENT MODEL
+   A projector in a lit room does not "dim" - it lifts the black floor while
+   leaving peak white roughly alone, and loses saturation. Both are modelled
+   as an affine per-channel transform so the SAME maths runs in the SVG
+   filter (visual) and in JS (the contrast table). That is what makes the
+   readout trustworthy rather than decorative.
+   ====================================================================== */
+const ENV = {
+  ideal:   {lift:0.00, sat:1.00, label:"ideal"},
+  typical: {lift:0.14, sat:0.90, label:"typical classroom"},
+  washed:  {lift:0.32, sat:0.72, label:"washed out"}
+};
+const DIST = {
+  front: {scale:1.00, blur:0,   px:"100%"},
+  mid:   {scale:0.55, blur:1.1, px:"55%"},
+  back:  {scale:0.32, blur:2.2, px:"32%"}
+};
+/* Machado et al. severity-1.0 CVD matrices */
+const CVD = {
+  none:    null,
+  deutan:  [0.367,0.861,-0.228,0, 0, 0.280,0.673,0.047,0, 0, -0.012,0.043,0.969,0, 0, 0,0,0,1,0],
+  protan:  [0.152,1.053,-0.205,0, 0, 0.115,0.786,0.099,0, 0, -0.004,-0.048,1.052,0, 0, 0,0,0,1,0],
+  tritan:  [1.256,-0.077,-0.178,0, 0, -0.078,0.931,0.148,0, 0, 0.005,0.691,0.304,0, 0, 0,0,0,1,0],
+  achroma: [0.213,0.715,0.072,0, 0, 0.213,0.715,0.072,0, 0, 0.213,0.715,0.072,0, 0, 0,0,0,1,0]
+};
+
+/* ======================================================================
+   RENDER
+   ====================================================================== */
+const stage   = document.getElementById("stage");
+const NS      = "http://www.w3.org/2000/svg";
+const mk = (t, a, txt) => {
+  const e = document.createElementNS(NS, t);
+  for (const k in a) e.setAttribute(k, a[k]);
+  if (txt !== undefined) e.textContent = txt;
+  return e;
+};
+
+let variant = new URLSearchParams(location.search).get("variant") || "A";
+if (!KEYS.includes(variant)) variant = "A";
+let dsKey   = "theater";
+let preset  = "flowcut";
+let active  = new Set(PRESETS[preset]);
+
+function nodePos(d) {
+  const p = {};
+  for (const n of d.nodes) p[n.id] = {x:n.x, y:n.y};
+  p.S = SYN.S; p.T = SYN.T;
+  return p;
+}
+/* trim a segment back to the node rim so arrowheads are not swallowed */
+function trim(a, b, r1, r2) {
+  const dx = b.x-a.x, dy = b.y-a.y, L = Math.hypot(dx,dy) || 1;
+  return {x1:a.x + dx/L*r1, y1:a.y + dy/L*r1, x2:b.x - dx/L*r2, y2:b.y - dy/L*r2};
+}
+function offsetSeg(s, off) {           /* perpendicular offset, for residual arcs */
+  const dx = s.x2-s.x1, dy = s.y2-s.y1, L = Math.hypot(dx,dy) || 1;
+  const nx = -dy/L*off, ny = dx/L*off;
+  return {x1:s.x1+nx, y1:s.y1+ny, x2:s.x2+nx, y2:s.y2+ny};
+}
+
+function build() {
+  const d   = DATA[dsKey];
+  const pos = nodePos(d);
+  const R   = 30;                                  /* geometry only - not appearance */
+  const eById = Object.fromEntries(d.edges.map(e => [e.id, e]));
+
+  /* which lanes are "hot" for variant C's scaffold rule */
+  const hot = new Set();
+  if (active.has("path"))     pathEdges(d).forEach(id => hot.add(id));
+  if (active.has("cut"))      d.cutEdges.forEach(id => hot.add(id));
+  if (active.has("removed"))  d.removed.forEach(id => hot.add(id));
+  if (active.has("naive"))    Object.keys(d.naiveLoad).forEach(id => hot.add(id));
+  if (active.has("residual")) d.residual.forEach(id => hot.add(id));
+  if (active.has("overlay"))  overlayEdges(d).forEach(id => hot.add(id));
+  if (active.has("flow") && !hot.size) d.edges.forEach(e => hot.add(e.id));
+
+  const svg = mk("svg", {
+    viewBox: `${-SHIFT} 0 ${W} ${H}`, width: W, height: H,
+    class: "v-" + variant + " " + [...active].map(a => "show-"+a).join(" ")
+  });
+
+  /* ---- defs: markers and the hatch patterns variant B uses for S/T sides */
+  const defs = mk("defs");
+  defs.innerHTML = `
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5"
+            markerHeight="5" orient="auto-start-reverse">
+      <path d="M0,1 L10,5 L0,9 z" fill="context-stroke"/></marker>
+    <marker id="ah-hollow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6"
+            markerHeight="6" orient="auto-start-reverse">
+      <path d="M0.5,1.5 L9.5,5 L0.5,8.5 z" fill="none" stroke="context-stroke"
+            stroke-width="1.6"/></marker>
+    <pattern id="hatchS" width="14" height="14" patternTransform="rotate(45)"
+             patternUnits="userSpaceOnUse">
+      <rect width="14" height="14" fill="rgba(0,114,178,.22)"/>
+      <line x1="0" y1="0" x2="0" y2="14" stroke="#0072b2" stroke-width="5"/></pattern>
+    <pattern id="hatchT" width="14" height="14" patternTransform="rotate(-45)"
+             patternUnits="userSpaceOnUse">
+      <rect width="14" height="14" fill="rgba(213,94,0,.22)"/>
+      <line x1="0" y1="0" x2="0" y2="14" stroke="#d55e00" stroke-width="5"/></pattern>`;
+  svg.appendChild(defs);
+
+  /* ---- layer 7 (under everything): min-cut S/T territory shading ---------- */
+  const gCut = mk("g", {class:"l-cut"});
+  const sPts = d.sSide.map(id => pos[id]).concat([pos.S]);
+  const tPts = d.nodes.filter(n => !d.sSide.includes(n.id)).map(n => pos[n.id]).concat([pos.T]);
+  gCut.appendChild(mk("path", {class:"sside", d: hullPath(sPts, 70)}));
+  gCut.appendChild(mk("path", {class:"tside", d: hullPath(tPts, 70)}));
+  svg.appendChild(gCut);
+
+  /* ---- base topology: real lanes + synthetic S/T arcs -------------------- */
+  const gBase = mk("g");
+  for (const e of d.edges) {
+    const s = trim(pos[e.src], pos[e.dst], R, R + 6);
+    const cls = "lane" + (hot.has(e.id) ? " hot" : "") +
+                (active.has("removed") && d.removed.includes(e.id) ? " removed" : "");
+    gBase.appendChild(mk("line", {...s, class: cls, "data-e": e.id}));
+    if (active.has("removed") && d.removed.includes(e.id)) {
+      const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2, k = 13;
+      const gx = mk("g", {class:"l-removed"});
+      gx.appendChild(mk("line", {x1:mx-k,y1:my-k,x2:mx+k,y2:my+k, class:"removed-x"}));
+      gx.appendChild(mk("line", {x1:mx-k,y1:my+k,x2:mx+k,y2:my-k, class:"removed-x"}));
+      gBase.appendChild(gx);
+    }
+  }
+  for (const n of d.nodes) {
+    if (n.kind === "supply") {
+      const s = trim(pos.S, pos[n.id], 22, R + 6);
+      gBase.appendChild(mk("line", {...s, class:"synth"}));
+    }
+    if (n.kind === "demand") {
+      const s = trim(pos[n.id], pos.T, R, 22 + 6);
+      gBase.appendChild(mk("line", {...s, class:"synth"}));
+    }
+  }
+  svg.appendChild(gBase);
+
+  /* ---- layer 10: naive routing load + capacity violations ---------------- */
+  const gNaive = mk("g", {class:"l-naive"});
+  for (const id in d.naiveLoad) {
+    const e = eById[id]; if (!e) continue;
+    const s = offsetSeg(trim(pos[e.src], pos[e.dst], R, R + 6), 9);
+    const bad = d.violations.includes(id);
+    if (bad) gNaive.appendChild(mk("line", {...s, class:"violation-outer"}));
+    gNaive.appendChild(mk("line", {...s, class: bad ? "violation" : "naive"}));
+    if (bad) {
+      const g = mk("g", {class:"vbadge"});
+      const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
+      g.appendChild(mk("circle", {cx:mx, cy:my - 26, r:15}));
+      g.appendChild(mk("text", {x:mx, y:my - 19}, "!"));
+      gNaive.appendChild(g);
+    }
+  }
+  svg.appendChild(gNaive);
+
+  /* ---- layer 9: single cheapest/safest path overlay ---------------------- */
+  const gOv = mk("g", {class:"l-overlay"});
+  for (let i = 0; i < d.overlayPath.length - 1; i++) {
+    const s = trim(pos[d.overlayPath[i]], pos[d.overlayPath[i+1]], R, R + 6);
+    gOv.appendChild(mk("line", {...s, class:"overlay"}));
+  }
+  svg.appendChild(gOv);
+
+  /* ---- layer 5: residual arcs, offset to the other side of the lane ------ */
+  const gRes = mk("g", {class:"l-residual"});
+  for (const id of d.residual) {
+    const e = eById[id]; if (!e) continue;
+    const s = offsetSeg(trim(pos[e.dst], pos[e.src], R, R + 6), 11);
+    gRes.appendChild(mk("line", {...s, class:"residual"}));
+  }
+  svg.appendChild(gRes);
+
+  /* ---- layer 6: augmenting path + bottleneck ----------------------------- */
+  const gPath = mk("g", {class:"l-path"});
+  for (let i = 0; i < d.path.length - 1; i++) {
+    const a = pos[d.path[i]], b = pos[d.path[i+1]];
+    if (!a || !b) continue;
+    gPath.appendChild(mk("line", {...trim(a, b, R - 4, R - 4), class:"path"}));
+  }
+  {
+    const e = eById[d.bottleneck.edge];
+    if (e) {
+      const s = trim(pos[e.src], pos[e.dst], R, R);
+      const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
+      gPath.appendChild(plated(mx, my + 4, "bottleneck " + d.bottleneck.value, "flowlabel"));
+    }
+  }
+  svg.appendChild(gPath);
+
+  /* ---- layer 7b: the cut line itself, crossing each severed lane --------- */
+  const gCutL = mk("g", {class:"l-cut"});
+  for (const id of d.cutEdges) {
+    const e = eById[id]; if (!e) continue;
+    const s = trim(pos[e.src], pos[e.dst], R, R);
+    const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
+    const dx = s.x2-s.x1, dy = s.y2-s.y1, L = Math.hypot(dx,dy) || 1;
+    const nx = -dy/L*24, ny = dx/L*24;
+    gCutL.appendChild(mk("line", {x1:mx-nx,y1:my-ny,x2:mx+nx,y2:my+ny, class:"cutline"}));
+  }
+  svg.appendChild(gCutL);
+
+  /* ---- nodes ------------------------------------------------------------- */
+  const gN = mk("g");
+  for (const p of [["S", pos.S], ["T", pos.T]]) {
+    gN.appendChild(mk("circle", {cx:p[1].x, cy:p[1].y, r:22, class:"node synthnode"}));
+    gN.appendChild(mk("text", {x:p[1].x, y:p[1].y + 6, class:"nlabel"}, p[0]));
+  }
+  for (const n of d.nodes) {
+    const cold = variant === "C" && hot.size &&
+                 !d.edges.some(e => hot.has(e.id) && (e.src === n.id || e.dst === n.id));
+    gN.appendChild(mk("circle", {cx:n.x, cy:n.y, r:30,
+                    class:"node " + n.kind + (cold ? " cold" : "")}));
+    const short = n.id.replace(/^(HUB|FOB|LANE|AIRHEAD)-/, "");
+    gN.appendChild(mk("text", {x:n.x, y:n.y + 5, class:"nlabel"}, short));
+    if (n.q !== undefined)
+      gN.appendChild(mk("text", {x:n.x, y:n.y + 48, class:"nsub"}, n.q + " u"));
+  }
+  svg.appendChild(gN);
+
+  /* ---- text layers, drawn last so nothing crosses them ------------------- */
+  const gTxt = mk("g");
+  for (const e of d.edges) {
+    const s  = trim(pos[e.src], pos[e.dst], R, R);
+    const mx = (s.x1+s.x2)/2, my = (s.y1+s.y2)/2;
+    const gc = mk("g", {class:"l-cap"});
+    gc.appendChild(plated(mx, my - 16, "cap " + e.cap, "elabel"));
+    gTxt.appendChild(gc);
+    const gr = mk("g", {class:"l-costrisk"});
+    gr.appendChild(plated(mx, my - 16, "c" + e.cost + "  r" + e.risk.toFixed(2), "elabel"));
+    gTxt.appendChild(gr);
+    const gf = mk("g", {class:"l-flow"});
+    gf.appendChild(plated(mx, my + 20, String(d.flow[e.id] ?? 0), "flowlabel"));
+    gTxt.appendChild(gf);
+  }
+  svg.appendChild(gTxt);
+
+  stage.replaceChildren(svg);
+  return svg;
+}
+
+/* a text node with an opaque plate behind it - the plate is sized after the
+   text is measured, so it is geometry, not appearance */
+function plated(x, y, str, cls) {
+  const g = mk("g");
+  const r = mk("rect", {class:"plate", rx:3});
+  const t = mk("text", {x, y, class:cls}, str);
+  g.appendChild(r); g.appendChild(t);
+  requestAnimationFrame(() => {
+    const bb = t.getBBox();
+    const pad = parseFloat(getComputedStyle(t).getPropertyValue("--plate-pad")) || 0;
+    r.setAttribute("x", bb.x - pad); r.setAttribute("y", bb.y - pad);
+    r.setAttribute("width", bb.width + pad*2);
+    r.setAttribute("height", bb.height + pad*2);
+  });
+  return g;
+}
+
+/* crude convex-hull-ish blob for the S-side / T-side territory shading */
+function hullPath(pts, pad) {
+  if (pts.length < 3) return "";
+  const cx = pts.reduce((a,p) => a+p.x, 0)/pts.length;
+  const cy = pts.reduce((a,p) => a+p.y, 0)/pts.length;
+  const sorted = [...pts].sort((a,b) =>
+    Math.atan2(a.y-cy, a.x-cx) - Math.atan2(b.y-cy, b.x-cx));
+  const out = sorted.map(p => {
+    const dx = p.x-cx, dy = p.y-cy, L = Math.hypot(dx,dy) || 1;
+    return {x: p.x + dx/L*pad, y: p.y + dy/L*pad};
+  });
+  return "M" + out.map(p => `${p.x},${p.y}`).join("L") + "Z";
+}
+
+function pathEdges(d) {
+  const ids = [];
+  for (let i = 0; i < d.path.length - 1; i++) {
+    const e = d.edges.find(e => e.src === d.path[i] && e.dst === d.path[i+1]);
+    if (e) ids.push(e.id);
+  }
+  return ids;
+}
+function overlayEdges(d) {
+  const ids = [];
+  for (let i = 0; i < d.overlayPath.length - 1; i++) {
+    const e = d.edges.find(e => e.src === d.overlayPath[i] && e.dst === d.overlayPath[i+1]);
+    if (e) ids.push(e.id);
+  }
+  return ids;
+}
+
+/* ======================================================================
+   ENVIRONMENT: the same affine transform, applied visually and numerically
+   ====================================================================== */
+function installFilters() {
+  const env = ENV[document.getElementById("env").value];
+  const cvd = CVD[document.getElementById("cvd").value];
+  let svg = document.getElementById("fx");
+  if (!svg) {
+    svg = mk("svg", {id:"fx", width:0, height:0,
+                     style:"position:absolute;width:0;height:0"});
+    document.body.appendChild(svg);
+  }
+  const sat = env.sat, l = env.lift, s = 1 - l;
+  svg.innerHTML = `
+    <filter id="f-env" color-interpolation-filters="sRGB">
+      <feColorMatrix type="saturate" values="${sat}"/>
+      <feComponentTransfer>
+        <feFuncR type="linear" slope="${s}" intercept="${l}"/>
+        <feFuncG type="linear" slope="${s}" intercept="${l}"/>
+        <feFuncB type="linear" slope="${s}" intercept="${l}"/>
+      </feComponentTransfer>
+    </filter>
+    ${cvd ? `<filter id="f-cvd" color-interpolation-filters="sRGB">
+       <feColorMatrix type="matrix" values="${cvd.join(" ")}"/></filter>` : ""}`;
+  const dist = DIST[document.getElementById("dist").value];
+  const chain = ["url(#f-env)"];
+  if (cvd) chain.push("url(#f-cvd)");
+  if (dist.blur) chain.push(`blur(${dist.blur}px)`);
+  stage.style.filter = chain.join(" ");
+  stage.style.transform = `scale(${dist.scale})`;
+}
+
+/* --- numeric twin of the filter, so the contrast table is honest --------- */
+function hex2rgb(c) {
+  c = c.trim();
+  if (c.startsWith("rgb")) {
+    const m = c.match(/[\d.]+/g).map(Number);
+    return [m[0]/255, m[1]/255, m[2]/255];
+  }
+  if (c.length === 4) c = "#" + [...c.slice(1)].map(x => x+x).join("");
+  return [parseInt(c.slice(1,3),16)/255, parseInt(c.slice(3,5),16)/255,
+          parseInt(c.slice(5,7),16)/255];
+}
+function applyEnvNum(rgb, env) {
+  const lum = 0.213*rgb[0] + 0.715*rgb[1] + 0.072*rgb[2];
+  let o = rgb.map(c => lum + (c - lum)*env.sat);
+  return o.map(c => Math.min(1, Math.max(0, c*(1-env.lift) + env.lift)));
+}
+function applyCvdNum(rgb, m) {
+  if (!m) return rgb;
+  return [ m[0]*rgb[0]+m[1]*rgb[1]+m[2]*rgb[2],
+           m[5]*rgb[0]+m[6]*rgb[1]+m[7]*rgb[2],
+           m[10]*rgb[0]+m[11]*rgb[1]+m[12]*rgb[2] ].map(c => Math.min(1, Math.max(0, c)));
+}
+const relLum = rgb => {
+  const f = c => c <= .03928 ? c/12.92 : Math.pow((c+.055)/1.055, 2.4);
+  return .2126*f(rgb[0]) + .7152*f(rgb[1]) + .0722*f(rgb[2]);
+};
+function ratio(a, b) {
+  const la = relLum(a), lb = relLum(b);
+  return (Math.max(la,lb) + .05) / (Math.min(la,lb) + .05);
+}
+
+/* Colour DIFFERENCE, not luminance ratio. Two marks can have identical
+   luminance and still be trivially distinguishable (green vs grey), so the
+   "are these two layers confusable?" test has to run in a perceptual space.
+   sRGB -> CIE Lab -> deltaE76. The CVD transform has already been applied to
+   both inputs, so under achromatopsia this correctly collapses to lightness. */
+function rgb2lab(rgb) {
+  const f = c => c <= .04045 ? c/12.92 : Math.pow((c+.055)/1.055, 2.4);
+  const [r,g,b] = rgb.map(f);
+  let X = (r*.4124 + g*.3576 + b*.1805) / .95047;
+  let Y = (r*.2126 + g*.7152 + b*.0722) / 1.00000;
+  let Z = (r*.0193 + g*.1192 + b*.9505) / 1.08883;
+  const k = t => t > .008856 ? Math.cbrt(t) : (7.787*t + 16/116);
+  X = k(X); Y = k(Y); Z = k(Z);
+  return [116*Y - 16, 500*(X - Y), 200*(Y - Z)];
+}
+function deltaE(a, b) {
+  const la = rgb2lab(a), lb = rgb2lab(b);
+  return Math.hypot(la[0]-lb[0], la[1]-lb[1], la[2]-lb[2]);
+}
+/* Just-noticeable difference is ~2.3. At projector distance, through washout,
+   on thin strokes seen for two seconds during a sentence, the working
+   threshold is far higher. 15 is the line used here. */
+const CONFUSABLE = 15;
+
+const PROBES = [
+  ["--lane",      "base lane stroke",          3.0],
+  ["--synth",     "synthetic S/T arc",         3.0],
+  ["--residual",  "residual arc",              3.0],
+  ["--path",      "augmenting path",           3.0],
+  ["--cut",       "min-cut line",              3.0],
+  ["--removed",   "removed lane",              3.0],
+  ["--overlay",   "single-path overlay",       3.0],
+  ["--naive",     "naive load",                3.0],
+  ["--violation", "capacity violation",        3.0],
+  ["--label-ink", "cap/cost/risk numerals",    4.5],
+  ["--flow-ink",  "flow numerals",             4.5],
+  ["--node-supply","supply node fill",         3.0],
+  ["--node-demand","demand node fill",         3.0]
+];
+
+function measure(svg) {
+  const cs  = getComputedStyle(svg);
+  const env = ENV[document.getElementById("env").value];
+  const m   = CVD[document.getElementById("cvd").value];
+  const bg  = applyCvdNum(applyEnvNum(hex2rgb(cs.getPropertyValue("--bg")), env), m);
+
+  /* per-token contrast */
+  const rows = PROBES.map(([tok, name, thr]) => {
+    const raw = cs.getPropertyValue(tok);
+    if (!raw || raw.includes("url")) return null;
+    const c = applyCvdNum(applyEnvNum(hex2rgb(raw), env), m);
+    const r = ratio(c, bg);
+    return {name, r, thr, rgb:c};
+  }).filter(Boolean);
+
+  const tb = document.querySelector("#contrast tbody");
+  tb.replaceChildren();
+  let fails = 0;
+  const head = document.createElement("tr");
+  head.innerHTML = "<th>token</th><th>ratio</th><th>need</th>";
+  tb.appendChild(head);
+  for (const row of rows) {
+    const cls = row.r >= row.thr ? "pass" : (row.r >= row.thr*0.75 ? "warn" : "fail");
+    if (cls === "fail") fails++;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${row.name}</td>
+      <td class="num ${cls}">${row.r.toFixed(2)}</td>
+      <td class="num">${row.thr.toFixed(1)}</td>`;
+    tb.appendChild(tr);
+  }
+
+  /* pairwise collisions: which layers become indistinguishable from each
+     other under the current CVD sim? This is the finding hue-only schemes
+     cannot survive. */
+  const collide = [];
+  for (let i = 0; i < rows.length; i++)
+    for (let j = i+1; j < rows.length; j++) {
+      const dE = deltaE(rows[i].rgb, rows[j].rgb);
+      if (dE < CONFUSABLE)
+        collide.push({p: rows[i].name + " ≡ " + rows[j].name, dE});
+    }
+  collide.sort((a,b) => a.dE - b.dE);
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td colspan="3" class="${collide.length ? "fail" : "pass"}"
+    style="padding-top:6px">${collide.length
+      ? "<b>" + collide.length + " confusable pair(s)</b> (ΔE&lt;" + CONFUSABLE + "): "
+        + collide.slice(0,5).map(c => c.p + " (" + c.dE.toFixed(0) + ")").join("; ")
+      : "no confusable pairs (all ΔE ≥ " + CONFUSABLE + ")"}</td>`;
+  tb.appendChild(tr);
+
+  /* type size at distance, expressed as a fraction of viewBox height (#5's
+     stable unit) and as an angular-ish equivalent at the chosen scale */
+  const dist = DIST[document.getElementById("dist").value];
+  const tt = document.querySelector("#typesize tbody");
+  tt.replaceChildren();
+  const th = document.createElement("tr");
+  th.innerHTML = "<th>text</th><th>units</th><th>% of H</th><th>@dist</th>";
+  tt.appendChild(th);
+  for (const [tok, name] of [["--flow","flow numerals"], ["--label","cap/cost/risk"],
+                             ["--node-label","node ids"], ["--node-sub","quantities"]]) {
+    const u = parseFloat(cs.getPropertyValue(tok));
+    const pct = u / H * 100;
+    /* Standard AV rule of thumb, expressed against #5's stable unit (a
+       fraction of the viewBox, not a pixel count): projected text needs a cap
+       height of at least H/50 (2.0%) to read from the back of a room, and
+       H/40 (2.5%) to read comfortably. Below H/50 it is a laptop-only mark. */
+    const cls = pct >= 2.5 ? "pass" : (pct >= 2.0 ? "warn" : "fail");
+    const tr2 = document.createElement("tr");
+    tr2.innerHTML = `<td>${name}</td><td class="num">${u}</td>
+      <td class="num ${cls}">${pct.toFixed(2)}%</td>
+      <td class="num">${(u*dist.scale).toFixed(1)}</td>`;
+    tt.appendChild(tr2);
+  }
+
+  /* variant C's ledger */
+  const showLedger = variant === "C";
+  document.getElementById("ledgerhead").style.display = showLedger ? "" : "none";
+  const lb = document.querySelector("#ledger tbody");
+  lb.replaceChildren();
+  if (showLedger) {
+    const d = DATA[dsKey];
+    const lh = document.createElement("tr");
+    lh.innerHTML = "<th>lane</th><th>cap</th><th>cost</th><th>risk</th>";
+    lb.appendChild(lh);
+    for (const e of d.edges) {
+      const tr3 = document.createElement("tr");
+      tr3.innerHTML = `<td>${e.src.replace(/^(HUB|FOB|LANE|AIRHEAD)-/,"")}→${
+        e.dst.replace(/^(HUB|FOB|LANE|AIRHEAD)-/,"")}</td>
+        <td class="num">${e.cap}</td><td class="num">${e.cost}</td>
+        <td class="num">${e.risk.toFixed(2)}</td>`;
+      lb.appendChild(tr3);
+    }
+  }
+}
+
+/* ======================================================================
+   WIRING
+   ====================================================================== */
+function renderLayerChecks() {
+  const box = document.getElementById("layers");
+  box.replaceChildren();
+  for (const [key, name] of LAYERS) {
+    const l = document.createElement("label");
+    const cb = document.createElement("input");
+    cb.type = "checkbox"; cb.checked = active.has(key);
+    cb.onchange = () => { cb.checked ? active.add(key) : active.delete(key); draw(); };
+    l.appendChild(cb); l.append(" " + name);
+    box.appendChild(l);
+  }
+}
+function draw() {
+  document.getElementById("vname").textContent = variant + " — " + VARIANTS[variant].name;
+  document.getElementById("blurb").textContent = VARIANTS[variant].blurb;
+  const svg = build();
+  installFilters();
+  requestAnimationFrame(() => measure(svg));
+  const u = new URL(location); u.searchParams.set("variant", variant);
+  history.replaceState(null, "", u);
+}
+function setVariant(v) { variant = v; renderLayerChecks(); draw(); }
+
+document.getElementById("prev").onclick = () =>
+  setVariant(KEYS[(KEYS.indexOf(variant) - 1 + KEYS.length) % KEYS.length]);
+document.getElementById("next").onclick = () =>
+  setVariant(KEYS[(KEYS.indexOf(variant) + 1) % KEYS.length]);
+document.getElementById("ds").onchange = e => { dsKey = e.target.value; draw(); };
+document.getElementById("preset").onchange = e => {
+  preset = e.target.value; active = new Set(PRESETS[preset]); renderLayerChecks(); draw();
+};
+for (const id of ["env","cvd","dist"])
+  document.getElementById(id).onchange = draw;
+document.getElementById("stress").onclick = () => {
+  document.getElementById("env").value  = "washed";
+  document.getElementById("cvd").value  = "deutan";
+  document.getElementById("dist").value = "back";
+  draw();
+};
+addEventListener("keydown", e => {
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) return;
+  if (e.key === "ArrowLeft")  document.getElementById("prev").click();
+  if (e.key === "ArrowRight") document.getElementById("next").click();
+  if (e.key === "s")          document.getElementById("stress").click();
+  const n = "1234".indexOf(e.key);
+  if (n >= 0) {
+    const sel = document.getElementById("preset");
+    sel.selectedIndex = n; sel.onchange({target:sel});
+  }
+});
+
+/* every control is URL-addressable, so a specific failure can be linked to */
+{
+  const q = new URLSearchParams(location.search);
+  for (const id of ["env","cvd","dist","ds","preset"]) {
+    const v = q.get(id);
+    if (v) {
+      const sel = document.getElementById(id);
+      if ([...sel.options].some(o => o.value === v)) sel.value = v;
+    }
+  }
+  dsKey  = document.getElementById("ds").value;
+  preset = document.getElementById("preset").value;
+  active = new Set(PRESETS[preset]);
+}
+
+renderLayerChecks();
+draw();
+</script>

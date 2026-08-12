@@ -9,7 +9,8 @@
 PYTHON ?= python3
 DATA   ?= data/theater_sample.json
 
-.PHONY: help install test run demo sweep api docker-build docker-run clean
+.PHONY: help install test run demo sweep api docker-build docker-run clean \
+        proto-legibility
 
 help:
 	@echo "Targets: install | test | run | demo | sweep | api | docker-build | docker-run | clean"
@@ -50,6 +51,11 @@ docker-build:
 
 docker-run:
 	docker run --rm -p 8000:8000 clopt:latest
+
+# Throwaway prototype for wayfinder #10 - projector legibility of the layer
+# catalog. Self-contained page, no server and no dependencies.
+proto-legibility:
+	$(PYTHON) -c "import webbrowser,pathlib; webbrowser.open(pathlib.Path('prototypes/legibility-prototype/index.html').resolve().as_uri())"
 
 clean:
 	rm -rf build dist *.egg-info src/*.egg-info .pytest_cache
