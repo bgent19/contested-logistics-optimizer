@@ -32,12 +32,26 @@ class _Arc:
 
 @dataclass
 class AugmentationStep:
-   """One BFS augmentation, captured for hand-trace / classroom display."""
+   """One BFS augmentation, captured for hand-trace / classroom display.
+
+   A complete snapshot of the residual graph, not a delta against the step
+   before it -- which is what lets a display step backwards by decrementing an
+   index rather than by replaying the run.
+
+   Nothing here is filtered. `lane_residuals` carries one term per arc of
+   `path`, INF included, so the two can be indexed against each other; a
+   consumer that wants a tidier list filters it itself, at the point of
+   display, where losing the alignment costs nothing.
+   """
    path: List[int]                                   # node indices, source..sink
-   lane_residuals: List[float]                       # pre-push residual of finite arcs on path
+   lane_residuals: List[float]                       # pre-push residual of every arc on path
    bottleneck: float
    total_after: float
    residual_edges: List[tuple[int, int, float, bool]]  # (u, v, residual, is_backward) post-push
+   # Flow on every forward arc, saturated and idle alike. Residual lists drop
+   # an arc the moment it hits zero, so a saturated arc is otherwise
+   # indistinguishable from one that was never there.
+   flows: List[tuple[int, int, float]] = field(default_factory=list)
    reverse_used: List[tuple[int, int]] = field(default_factory=list)  # cancellation arcs traversed
 
 
@@ -69,6 +83,19 @@ class EdmondsKarp:
       # Flow equals capacity migrated onto the backward partner arc.
       return self.arcs[fwd ^ 1].cap
    
+   def _residual_snapshot(self) -> List[Tuple[int, int, float, bool]]:
+      """Every arc with spare capacity right now, as (u, v, residual, is_backward)."""
+      out: List[Tuple[int, int, float, bool]] = []
+      for idx, arc in enumerate(self.arcs):
+         if arc.cap > 1e-12:
+            out.append((self.arcs[idx ^ 1].to, arc.to, arc.cap, idx % 2 == 1))
+      return out
+
+   def _flow_snapshot(self) -> List[Tuple[int, int, float]]:
+      """Flow on every forward arc right now -- including the ones carrying none."""
+      return [(self.arcs[fwd ^ 1].to, self.arcs[fwd].to, self.arcs[fwd ^ 1].cap)
+              for fwd in self._forward]
+
    def _bfs_augmenting_path(self, s: int, t: int) -> Optional[List[int]]:
       """Return the arc ids of a shortest (fewest-arc) s->t augmenting path."""
       parent_arc = [-1] * self.n
@@ -99,6 +126,20 @@ class EdmondsKarp:
    def max_flow(self, s: int, t: int, trace: bool = False) -> float:
       self.trace = []
       total = 0.0
+      if trace:
+         # Step 0: the graph before anything is pushed. A display whose rule
+         # is "residuals from the previous step, path from this one" has no
+         # previous step for iteration 1 otherwise, and reconstructing this
+         # one downstream means rebuilding the residual graph a second time.
+         self.trace.append(AugmentationStep(
+            path=[],
+            lane_residuals=[],
+            bottleneck=0.0,
+            total_after=0.0,
+            residual_edges=self._residual_snapshot(),
+            flows=self._flow_snapshot(),
+            reverse_used=[],
+         ))
       while True:
          path = self._bfs_augmenting_path(s, t)
          if path is None:
@@ -115,18 +156,14 @@ class EdmondsKarp:
             self.arcs[a ^ 1].cap += bottleneck
          total += bottleneck
          if trace:
-            residual_edges: List[Tuple[int, int, float, bool]] = []
-            for idx, arc in enumerate(self.arcs):
-               if arc.cap > 1e-12:
-                  u = self.arcs[idx ^ 1].to
-                  v = arc.to
-                  residual_edges.append((u, v, arc.cap, idx % 2 == 1))
             self.trace.append(AugmentationStep(
                path=nodes,
-               lane_residuals=[c for c in pre if c != INF],
+               # Unfiltered: one term per arc of `path`, INF and all.
+               lane_residuals=pre,
                bottleneck=bottleneck,
                total_after=total,
-               residual_edges=residual_edges,
+               residual_edges=self._residual_snapshot(),
+               flows=self._flow_snapshot(),
                reverse_used=rev_used,
             ))
       return total

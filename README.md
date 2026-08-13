@@ -303,7 +303,7 @@ make api      # uvicorn clopt.api:app  ->  http://localhost:8000/docs
 | `GET /route?from=&to=&safest=&threat=` | single-convoy path |
 | `GET /sweep?lambdas=&threat=` | cost/risk frontier rows, each with the plan's legs |
 | `GET /naive?lambdas=&threat=` | Day 1's unbuildable plan, complete, one per lambda |
-| `GET /maxflow?threat=` | max throughput + min-cut certificate |
+| `GET /maxflow?trace=&threat=` | max throughput + min-cut certificate, optionally the whole Edmonds-Karp trace |
 | `GET /interdict?budget=&method=&threat=` | adversary's cheapest blockade |
 
 One server serves every theater. Each endpoint above also takes an optional
@@ -412,6 +412,65 @@ Three details a client depends on:
   overdrawn one — which is half of what Day 1 is arguing.
 - **`notional_cost` is named to carry its own asterisk.** It undercuts the
   feasible optimum precisely because it is buying capacity that does not exist.
+
+### `/maxflow?trace=true`: the whole Edmonds-Karp run, in one array
+
+Day 2 walks the augmentations at the front of the room, forwards and back. So
+the entire trace ships on one request, and every entry is a **complete
+snapshot of the residual graph** rather than a delta against the entry before
+it — stepping backwards is a decrement of an index, and the server keeps no
+cursor. Without `trace`, the response is exactly what it always was.
+
+```jsonc
+// GET /maxflow?dataset=textbook_maxflow&trace=true
+// (the arrays marked ... are abridged here, never in the response)
+{ "max_throughput": 7.0, "cut_capacity": 7.0,
+  "source_side": ["A", "B", "C", "s"],
+  "cut_lanes": [ { "src": "B", "dst": "t", "capacity": 5.0 },
+                 { "src": "A", "dst": "D", "capacity": 2.0 } ],
+  "trace": [
+    { "iteration": 0,            // the graph before anything is pushed
+      "path": [], "lane_residuals": [], "bottleneck": 0.0, "total_after": 0.0,
+      "forward_residual": [ { "src": "A", "dst": "B", "residual": 3.0 }, ... ],
+      "reverse_residual": [],
+      "flows": [ { "src": "A", "dst": "B", "flow": 0.0 }, ... ],
+      "used_reverse": [] },
+    ...,
+    { "iteration": 3,            // the one that cancels an earlier decision
+      "path": ["__source__", "s", "C", "B", "A", "D", "t", "__sink__"],
+      "lane_residuals": [null, 3.0, 4.0, 3.0, 2.0, 4.0, null],
+      "bottleneck": 2.0, "total_after": 7.0,
+      "forward_residual": [ { "src": "s", "dst": "C", "residual": 1.0 }, ... ],
+      "reverse_residual": [ { "src": "B", "dst": "A", "residual": 1.0 }, ... ],
+      "flows": [ { "src": "A", "dst": "B", "flow": 1.0 },
+                 { "src": "B", "dst": "t", "flow": 5.0 }, ... ],
+      "used_reverse": [ { "src": "B", "dst": "A" } ] }
+  ] }
+```
+
+Four things a client depends on:
+
+- **`iteration` 0 is a step the algorithm never took.** It holds the initial
+  residual graph so that the rule "draw residuals from step k-1, annotate the
+  path from step k" has a k-1 at iteration 1. The array is otherwise one entry
+  per augmentation — the instructor says "iteration 3", not "frame 6", and it
+  lines up with `clopt maxflow --trace` and the hand-trace on the board.
+- **Paths keep the synthetic terminals**, under the reserved ids `__source__`
+  and `__sink__`, which the uppercase-hyphen ids of a scenario file cannot
+  collide with. A stripped path would appear to begin mid-graph.
+- **`lane_residuals` has exactly one term per arc of `path`**, so a `min(...)`
+  term can be anchored to the lane it came from. That is why the unbounded
+  terms ship as `null` rather than being dropped: `null` means *unbounded*
+  (the terminal arcs are built at infinity, which JSON cannot encode), and it
+  should be drawn as no numeral — a super-source arc carries no capacity.
+- **`flows` covers every arc, saturated ones included.** The residual lists
+  drop an arc the moment it hits zero, which makes a saturated lane look like
+  one that was never there — and those are the lanes Day 2 wants drawn. Take
+  the flow from here rather than deriving `cap - residual` client-side.
+
+The CLI prints none of the above: `clopt maxflow --trace` filters the
+terminals, the unbounded terms and step 0 at print time, because a terminal
+reader is served by the tidy version and a drawing is not.
 
 ---
 
