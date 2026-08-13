@@ -21,7 +21,12 @@ def network_from_dict(data: Dict[str, Any]) -> Network:
             id=n["id"],
             kind=n["kind"],
             quantity=float(n.get("quantity", 0.0)),
-            label=n.get("label", "")
+            label=n.get("label", ""),
+            # Coordinates are passed through untouched -- no scaling, no
+            # flipping, and no float() coercion that would rewrite an
+            # authored 130 as 130.0 the next time the file is saved.
+            x=n.get("x"),
+            y=n.get("y")
          )
       )
    for e in data.get("edges", []):
@@ -70,7 +75,16 @@ def load_scenario(path:str) -> Scenario:
 def network_to_dict(net: Network) -> Dict[str, Any]:
    return {
       "nodes": [
-         {"id": n.id, "kind": n.kind.value, "quantity": n.quantity, "label": n.label}
+         # The `x`/`y` keys are written even when unauthored (as null): this
+         # is the site whose omission loses a hand-authored layout silently.
+         {
+            "id": n.id,
+            "kind": n.kind.value,
+            "quantity": n.quantity,
+            "label": n.label,
+            "x": n.x,
+            "y": n.y,
+         }
          for n in net.nodes.values()
       ],
       "edges": [
