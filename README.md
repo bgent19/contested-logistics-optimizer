@@ -40,7 +40,11 @@ tunable risk posture all fall out of one model.
 
 ## Quick start
 
-No dependencies beyond the standard library are needed for the core and CLI.
+**Python 3.12 or newer.** No dependencies beyond the standard library are
+needed for the core and CLI, but 3.12 is the floor: it is what CI runs and what
+the container is built on, so it is the only version this repo is known to work
+on. If your laptop has an older Python, Option A (Docker) needs nothing
+installed at all.
 
 ```bash
 # Option A: Docker (builds, runs the tests, then serves the API)

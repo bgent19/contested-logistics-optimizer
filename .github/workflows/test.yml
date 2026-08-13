@@ -19,6 +19,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # One version, and it is the one `pyproject.toml` advertises as its
+      # floor. A matrix over 3.10/3.11 was the alternative; it was declined
+      # because the repo has never run on either, and testing versions we do
+      # not ship to is a cost without a claim behind it.
+      #
+      # To support an older interpreter, add it here *and* lower
+      # `requires-python`. `tests/test_python_version_claims.py` fails if only
+      # one of the two moves.
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

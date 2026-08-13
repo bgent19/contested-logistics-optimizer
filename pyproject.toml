@@ -7,7 +7,19 @@ name = "clopt"
 version = "0.1.0"
 description = "Contested-Logistics Routing Optimizer: risk-weighted min-cost-flow resupply planning."
 readme = "README.md"
-requires-python = ">=3.10"
+# 3.12 is not an aspiration -- it is the only interpreter this repo runs on.
+# CI runs 3.12, the Dockerfile builds on `python:3.12-slim`, and that is the
+# runtime students get. This once read ">=3.10", which nothing ever verified;
+# a support claim nobody checks is worse than a narrower one that is true.
+#
+# Widening this is a real option, not a forbidden one -- but widening it alone
+# is not. `tests/test_python_version_claims.py` fails until the workflow runs
+# the new floor too, so the claim and the evidence move together.
+requires-python = ">=3.12"
+
+classifiers = [
+  "Programming Language :: Python :: 3.12",
+]
 license = { text = "MIT" }
 authors = [{ name = "Brett G" }]
 keywords = ["operations-research", "min-cost-flow", "logistics", "routing", "optimization"]
