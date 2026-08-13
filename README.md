@@ -32,6 +32,35 @@ dangerous one (a mined strait, a covered chokepoint). It also ignores
 feasible plan once volume matters. And it has nothing to say when a node is
 struck mid-campaign.
 
+You can run the collapse rather than take it on faith:
+
+```bash
+clopt naive    --data data/theater_sample.json --risk-aversion 0   # notional 1080
+clopt allocate --data data/theater_sample.json --risk-aversion 0   # feasible  1250
+```
+
+`naive` serves each base from its own globally cheapest hub, superimposes the
+routes, and counts what breaks: **HUB-BRAVO → LANE-J2** carries 90 down a
+60-unit lane, and HUB-BRAVO is asked to dispatch 90 units of the 60 it holds
+while HUB-ALPHA sits on 50 spare. The plan prices at **1080** against the
+feasible optimum's **1250** at identical full fill — it is cheaper precisely
+because it is buying capacity that does not exist. That 170 is what
+buildability costs.
+
+(The comparison is a λ=0 one. Raise risk aversion and the naive plan buys
+expensive-but-safe air lanes, so its raw transit cost can pass the feasible
+optimum's while still undercutting it on the blended objective it minimized.
+`clopt naive` computes the comparison from whichever theater you hand it, and
+declines to quote a gap when the feasible optimum cannot fill demand either.)
+
+At λ=50 the whole theater stampedes onto HUB-ALPHA, which is then 40 units
+overdrawn while HUB-BRAVO sits completely idle — the same rule, the same
+network, and the opposite hub in trouble. One honest footnote for the board:
+FOB-LIMA is a genuine **tie** at λ=50, costing 24.5 from either hub, and it
+goes to ALPHA only because ties break on `(effective_cost, origin_id)` and
+`HUB-ALPHA` sorts first. If a student asks why LIMA switched hubs, the true
+answer is that it didn't have to.
+
 This service treats the whole thing as a **capacitated min-cost flow** with a
 risk-blended objective, so capacity, multi-source/multi-sink allocation, and a
 tunable risk posture all fall out of one model.
@@ -166,7 +195,7 @@ Each day's idea has a concrete home in the code you can run and read.
 
 | unit | idea | in this repo |
 |------|------|--------------|
-| **Day 1** | shortest path is the wrong model once capacity binds | `routing.py` (`cheapest_path` / `safest_path`) is the "first instinct"; the capacity-limited sample theater shows why it collapses |
+| **Day 1** | shortest path is the wrong model once capacity binds | `routing.py`: `cheapest_path` / `safest_path` are the "first instinct", and `naive_plan` builds a whole plan out of them so the collapse is computed, not asserted — `clopt naive` prints the oversubscribed lanes and the overdrawn hub |
 | **Day 2** | Ford–Fulkerson / **Edmonds–Karp** max-flow on a residual graph | `maxflow.py` (BFS augmenting paths, explicit residual arcs); reproduces the unit's worked example exactly: `clopt maxflow --data data/textbook_maxflow.json` returns **7** |
 | **Day 3** | **Max-Flow Min-Cut**: the cut is a certificate of optimality | `throughput.py` extracts the witness cut; `clopt maxflow` prints the lanes that prove no plan moves more |
 | **Day 4** | **interdiction** - polynomial min-cut vs. NP-hard budget version | `interdiction.py`: `min_cut_interdiction` (polynomial) and `budget_interdiction` (exhaustive optimum *and* greedy heuristic, with the combinatorial subset count surfaced) |
@@ -239,6 +268,10 @@ clopt info     --data data/theater_sample.json
 clopt allocate --data data/theater_sample.json --risk-aversion 25
 clopt allocate --data data/theater_sample.json --threat strait_mined
 
+# Day 1: the naive plan and everything it oversubscribes
+clopt naive    --data data/theater_sample.json --risk-aversion 0
+clopt naive    --data data/theater_sample.json --lambda 50    # the stampede onto ALPHA
+
 # Single-convoy routing
 clopt route    --data data/theater_sample.json --from HUB-ALPHA --to FOB-KILO
 clopt route    --data data/theater_sample.json --from HUB-ALPHA --to FOB-KILO --safest
@@ -265,7 +298,7 @@ make api      # uvicorn clopt.api:app  ->  http://localhost:8000/docs
 | endpoint | purpose |
 |----------|---------|
 | `GET /datasets` | the dataset menu: `id`, `name`, `description` |
-| `GET /scenario` | theater summary and available threat pictures |
+| `GET /scenario` | the whole drawable theater: network, coordinates, threat pictures |
 | `GET /allocate?risk_aversion=&threat=` | full allocation plan with per-leg flow |
 | `GET /route?from=&to=&safest=&threat=` | single-convoy path |
 | `GET /sweep?lambdas=&threat=` | cost/risk frontier rows, each with the plan's legs |
@@ -285,6 +318,55 @@ load stops the server immediately and the error names the file, rather than
 surfacing as a 500 halfway through a class.
 
 Interactive Swagger docs are served at `/docs`.
+
+### The `/scenario` payload
+
+`/scenario` is the one endpoint a frontend draws from, so it returns the whole
+picture in a single request: the summary counts, the full network with authored
+coordinates, and every threat picture with its effects already computed.
+
+```jsonc
+{
+  "name": "...", "description": "...",
+  "node_count": 9, "edge_count": 12,
+  "total_supply": 180.0, "total_demand": 160.0,
+  "network": {
+    "nodes": [ { "id": "HUB-ALPHA", "kind": "supply", "quantity": 120.0,
+                 "label": "...", "x": 110.0, "y": 250.0 } ],
+    "edges": [ { "id": "e00", "src": "HUB-ALPHA", "dst": "LANE-J1",
+                 "cap": 120.0, "cost": 4.0, "risk": 0.05, "bidirectional": false } ]
+  },
+  "threat_pictures": {
+    "strait_mined": {
+      "disruptions": [ { "kind": "remove_edge", "src": "...", "dst": "...", "note": "..." } ],
+      "changes":     [ { "id": "e01", "cap": 0.0, "risk": 0.45 } ]
+    }
+  }
+}
+```
+
+Four things are worth knowing before writing a client against it:
+
+- **There is no `threat` parameter.** The pristine network is returned always,
+  and each picture's effects ship inside it, so switching threat pictures on
+  screen needs no second request.
+- **Edges are the *stored* edges — never reverse arcs.** A `bidirectional`
+  lane is one entry here and two arcs inside the solver; deriving the reverse
+  is the client's job. Shipping the expansion would draw every such lane twice.
+- **The edge `id` is the stored-edge index**, zero-padded (`e00`…), so a
+  dataset file's edge order is part of the contract. It is an index rather
+  than a `"src>dst"` composite because the model permits parallel edges.
+- **`changes` is server-computed and deliberately redundant** with the
+  declarations beside it: it is each edge's *post*-disruption `cap` and `risk`,
+  so a client overwrites rather than reimplementing five disruption kinds
+  (including `remove_node`'s zero-every-incident-edge semantics and a risk
+  clamp) in JavaScript. The `disruptions` list still ships because its `note`
+  is instructor-written narration — on a projector, a caption.
+
+One authoring trap, known and not fixed: disruption declarations match on the
+**stored direction only**, so a threat picture written with `src`/`dst`
+reversed matches nothing and fails silently. Authoring a new theater means
+checking that each declaration actually moves an edge.
 
 ---
 
