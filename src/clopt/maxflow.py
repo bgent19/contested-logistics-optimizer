@@ -108,9 +108,14 @@ class EdmondsKarp:
       path.reverse()
       return path
    
-   def _snapshot(self, nodes: List[int], pre: List[float], bottleneck: float,
+   def _snapshot(self, nodes: List[int], pre: List[float], *, bottleneck: float,
                  total: float, rev_used: List[Tuple[int, int]]) -> AugmentationStep:
-      """The whole residual graph and every arc's flow, as they stand right now."""
+      """The whole residual graph and every arc's flow, as they stand right now.
+
+      The two floats are keyword-only: `bottleneck` and `total` are the same
+      type and adjacent, so transposing them is a silent wrong number rather
+      than an error, and it would land on the projector as a plausible trace.
+      """
       residual_edges: List[Tuple[int, int, float, bool]] = []
       for idx, arc in enumerate(self.arcs):
          if arc.cap > 1e-12:
@@ -138,7 +143,8 @@ class EdmondsKarp:
          # otherwise has no "before" state to be drawn against, and
          # reconstructing one downstream would mean rebuilding the residual
          # graph outside the solver that owns it.
-         self.trace.append(self._snapshot([], [], 0.0, 0.0, []))
+         self.trace.append(
+            self._snapshot([], [], bottleneck=0.0, total=0.0, rev_used=[]))
       while True:
          path = self._bfs_augmenting_path(s, t)
          if path is None:
@@ -155,7 +161,8 @@ class EdmondsKarp:
             self.arcs[a ^ 1].cap += bottleneck
          total += bottleneck
          if trace:
-            self.trace.append(self._snapshot(nodes, pre, bottleneck, total, rev_used))
+            self.trace.append(self._snapshot(
+               nodes, pre, bottleneck=bottleneck, total=total, rev_used=rev_used))
       return total
    
    def min_cut_source_side(self, s: int) -> List[bool]:

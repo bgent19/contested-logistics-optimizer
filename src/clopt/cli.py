@@ -227,19 +227,29 @@ def cmd_sweep(args) -> int:
    return 0
 
 
-def _real_lanes(arcs):
-   """Trace arcs a student should see: real endpoints, printable numbers.
+def _between_real_nodes(arcs):
+   """Trace arcs with both endpoints in the theater, dropping the scaffolding.
 
    The trace ships complete -- synthetic terminals named, unbounded residuals
    carried as `None` -- because the API's consumer draws all of it. The
    classroom text wants neither: a super-source arc is scaffolding, and `inf` is
    not a capacity anyone writes on a board. So the narrowing lives here, at the
    point of display, rather than in the data layer where it used to cost the
-   drawing consumer its alignment. Takes (u, v) pairs or (u, v, value) triples.
+   drawing consumer its alignment.
    """
    return [arc for arc in arcs
-           if arc[0] not in SYNTHETIC_IDS and arc[1] not in SYNTHETIC_IDS
-           and (len(arc) < 3 or arc[2] is not None)]
+           if arc[0] not in SYNTHETIC_IDS and arc[1] not in SYNTHETIC_IDS]
+
+
+def _printable_residuals(arcs):
+   """(u, v, residual) triples with a number to print.
+
+   Only the terminal arcs are unbounded, so dropping the synthetic endpoints
+   already drops every `None`. The guard is kept because the alternative to a
+   redundant filter here is a `TypeError` mid-lecture if that ever stops being
+   true.
+   """
+   return [(u, v, c) for u, v, c in _between_real_nodes(arcs) if c is not None]
 
 
 def cmd_maxflow(args) -> int:
@@ -270,16 +280,16 @@ def cmd_maxflow(args) -> int:
          print(f"Iteration {st.iteration}: {path}")
          print(f"  bottleneck = min({terms}) = {st.bottleneck:g}")
          print(f"  cumulative flow = {st.total_after:g}")
-         used_reverse = _real_lanes(st.used_reverse)
+         used_reverse = _between_real_nodes(st.used_reverse)
          if used_reverse:
                arcs = ", ".join(f"{u}->{v}" for u, v in used_reverse)
                print(f"  * uses reverse arc(s) {arcs} to cancel/reroute earlier flow "
                      f"-- this is where the residual graph earns its keep")
-         forward_residual = _real_lanes(st.forward_residual)
+         forward_residual = _printable_residuals(st.forward_residual)
          if forward_residual:
                fwd = "  ".join(f"{u}->{v} {c:g}" for u, v, c in forward_residual)
                print(f"  residual (spare capacity): {fwd}")
-         reverse_residual = _real_lanes(st.reverse_residual)
+         reverse_residual = _printable_residuals(st.reverse_residual)
          if reverse_residual:
                rev = "  ".join(f"{u}->{v} {c:g}" for u, v, c in reverse_residual)
                print(f"  residual (reverse/cancel): {rev}")
