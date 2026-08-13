@@ -695,6 +695,11 @@ UNTRACED_FIELDS = {"max_throughput", "cut_capacity", "source_side", "cut_lanes"}
 
 # Reserved ids for the super-source and super-sink. Scenario files use
 # uppercase-hyphen ids, so the dunder prefix cannot collide with a real node.
+#
+# Spelled as literals rather than imported from `clopt.throughput`, which is
+# where the core's own tests get them: these two strings are wire format now.
+# A frontend has them hard-coded, so renaming the constant must turn this file
+# red -- importing it would let the rename through silently.
 SUPER_SOURCE = "__source__"
 SUPER_SINK = "__sink__"
 
@@ -754,6 +759,19 @@ def test_the_trace_is_one_array_of_iterations_plus_a_step_zero(dataset_id):
     assert zero["forward_residual"], "step 0 carries the initial residual graph"
 
 
+def test_the_textbook_trace_is_the_three_iterations_of_the_hand_trace():
+    """`iterations + 1` against a count this file did not derive from the array.
+
+    The check above compares the trace's length to its own contents, which
+    would hold just as well on a trace that lost every augmentation. Three is
+    the number on the board -- the Day 2 worked example -- and it is the one
+    literal this section pins, because "one entry per augmentation" cannot be
+    verified without a count from outside. The bottlenecks behind it stay in
+    `tests/test_maxflow_interdiction.py`, at full truth, pinned once.
+    """
+    assert [step["iteration"] for step in _traced("textbook_maxflow")] == [0, 1, 2, 3]
+
+
 @pytest.mark.parametrize("dataset_id", DATASET_IDS)
 def test_every_step_carries_the_full_field_set(dataset_id):
     for step in _traced(dataset_id):
@@ -766,8 +784,18 @@ def test_every_step_carries_the_full_field_set(dataset_id):
 # anchored to the lane it came from. Length equality is what pins the fix.
 @pytest.mark.parametrize("dataset_id", DATASET_IDS)
 def test_lane_residuals_carry_one_term_per_arc_of_the_path(dataset_id):
-    for step in _traced(dataset_id):
-        assert len(step["lane_residuals"]) == max(len(step["path"]) - 1, 0), (
+    # Stated exactly, with no clamp: a `max(len(path) - 1, 0)` would also pass
+    # on a real augmentation that de-aligned all the way down to no terms,
+    # which is the failure this assertion exists to catch. Step 0 is the one
+    # step the equality cannot describe -- it has no path at all -- so it is
+    # asserted as what it is instead of being folded in.
+    steps = _traced(dataset_id)
+
+    zero = steps[0]
+    assert zero["path"] == [] and zero["lane_residuals"] == []
+
+    for step in _augmentations(steps):
+        assert len(step["lane_residuals"]) == len(step["path"]) - 1, (
             f"iteration {step['iteration']}: {len(step['lane_residuals'])} "
             f"terms against a {len(step['path'])}-node path; the frontend "
             f"cannot anchor a min(...) term to the lane it came from"

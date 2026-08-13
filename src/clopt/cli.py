@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import List
+from typing import List, Sequence, Tuple
 
 from .routing import cheapest_path, naive_plan, safest_path
 from .scenario import load_scenario
@@ -240,7 +240,7 @@ def _real_nodes(path: List[str]) -> List[str]:
    return [n for n in path if n not in _SYNTHETIC]
 
 
-def _real_arcs(arcs):
+def _real_arcs(arcs: Sequence[Tuple[str, ...]]) -> List[Tuple[str, ...]]:
    """Arcs between real nodes. Works on (u, v) pairs and (u, v, residual) alike.
 
    Dropping the terminal arcs also drops every unbounded residual, since they

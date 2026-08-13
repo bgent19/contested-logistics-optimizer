@@ -17,8 +17,13 @@ TEXTBOOK = os.path.abspath(os.path.join(DATA, "textbook_maxflow.json"))
 THEATER = os.path.abspath(os.path.join(DATA, "theater_sample.json"))
 
 
-def AUGMENTATIONS(res):
-    """The trace without the prepended step 0 -- one entry per augmentation."""
+def _augmentations(res):
+    """The trace without the prepended step 0 -- one entry per augmentation.
+
+    Named as `tests/test_api_contract.py` names its own: that one takes the
+    decoded array, this one takes the result object, and they are otherwise
+    the same idea on either side of the wire.
+    """
     return [s for s in res.trace if s.iteration > 0]
 
 
@@ -113,7 +118,7 @@ def test_trace_reaches_max_flow():
     # Every augmentation runs super-source to super-sink; the terminals are
     # *retained* now (see `test_the_trace_keeps_the_synthetic_terminals`), so
     # the real source and sink sit one hop inside them.
-    for s in AUGMENTATIONS(res):
+    for s in _augmentations(res):
         assert s.path[0] == SUPER_SOURCE and s.path[1] == "s"
         assert s.path[-2] == "t" and s.path[-1] == SUPER_SINK
 
@@ -128,7 +133,7 @@ def test_the_trace_opens_with_a_step_zero_holding_the_initial_residual_graph():
     """
     res = max_flow_min_cut(load_scenario(TEXTBOOK).under(None), trace=True)
 
-    assert len(res.trace) == len(AUGMENTATIONS(res)) + 1
+    assert len(res.trace) == len(_augmentations(res)) + 1
     zero = res.trace[0]
     assert zero.iteration == 0
     assert zero.path == [] and zero.lane_residuals == []
@@ -149,7 +154,7 @@ def test_the_trace_keeps_the_synthetic_terminals():
     """
     res = max_flow_min_cut(load_scenario(TEXTBOOK).under(None), trace=True)
 
-    for step in AUGMENTATIONS(res):
+    for step in _augmentations(res):
         assert step.path[0] == SUPER_SOURCE and step.path[-1] == SUPER_SINK
         # `None` is unbounded: the terminal arcs are built at infinity.
         assert step.lane_residuals[0] is None
@@ -165,7 +170,7 @@ def test_lane_residuals_carry_one_term_per_arc_of_the_path():
     """
     for path in (TEXTBOOK, THEATER):
         res = max_flow_min_cut(load_scenario(path).under(None), trace=True)
-        for step in AUGMENTATIONS(res):
+        for step in _augmentations(res):
             assert len(step.lane_residuals) == len(step.path) - 1
 
 
@@ -206,7 +211,7 @@ def test_textbook_trace_demonstrates_cancellation():
     """
     net = load_scenario(TEXTBOOK).under(None)
     res = max_flow_min_cut(net, trace=True)
-    steps = AUGMENTATIONS(res)
+    steps = _augmentations(res)
 
     # Three augmentations, pushing 3 / 2 / 2.
     assert [s.bottleneck for s in steps] == [3, 2, 2]
