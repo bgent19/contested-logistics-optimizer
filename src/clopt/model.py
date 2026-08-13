@@ -53,6 +53,16 @@ class Node:
          raise ValueError(f"Node {self.id}: quantity must be non-negative.")
       if self.kind is NodeKind.TRANSIT and self.quantity:
          raise ValueError(f"Node {self.id}: transit nodes carry no quantity.")
+      if (self.x is None) != (self.y is None):
+         # Half a coordinate is worse than none: a layout can neither place
+         # the node nor tell that it is supposed to. Raised here, beside the
+         # other field invariants, so the registry's eager scan catches a
+         # half-authored file when the server starts and names it -- rather
+         # than the API discovering it while building a response, mid-class.
+         raise ValueError(
+            f"Node {self.id}: x and y must be authored together "
+            f"(got x={self.x}, y={self.y})."
+         )
 
 
 @dataclass

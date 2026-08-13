@@ -20,9 +20,10 @@ from  __future__ import annotations
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 from .datasets import DatasetRegistry, build_registry
+from .model import Disruption, DisruptionKind, Edge, Node, NodeKind
 from .routing import cheapest_path, safest_path
 from .scenario import Scenario
 from .solver import solve_allocation, pareto_sweep
@@ -122,24 +123,16 @@ class DatasetSummary(BaseModel):
 # it is modelled rather than hand-built as a dict, and /docs documents it.
 class NodeOut(BaseModel):
    id: str
-   kind: str
+   # The enum, not a bare `str`: it costs nothing and makes /docs list the
+   # kinds a client can expect instead of promising "any string".
+   kind: NodeKind
    quantity: float
    label: str
    # Authored diagram position in `viewBox` units, `null` when unauthored.
+   # Both or neither -- enforced in `Node.__post_init__`, so a half-authored
+   # file stops the server at startup rather than reaching this model.
    x: Optional[float] = None
    y: Optional[float] = None
-
-   @model_validator(mode="after")
-   def _coordinates_are_both_or_neither(self) -> "NodeOut":
-      if (self.x is None) != (self.y is None):
-         # Half a coordinate is worse than none: a layout cannot place the
-         # node and cannot tell that it needs to. Raising here means a file
-         # authored that way is caught by the contract test in CI rather
-         # than by a 500 in front of a class.
-         raise ValueError(
-            f"Node {self.id}: x and y must be authored together (got x={self.x}, y={self.y})."
-         )
-      return self
 
 
 class EdgeOut(BaseModel):
@@ -176,7 +169,7 @@ class DisruptionOut(BaseModel):
    is the caption.
    """
 
-   kind: str
+   kind: DisruptionKind
    src: Optional[str] = None
    dst: Optional[str] = None
    node: Optional[str] = None
@@ -218,8 +211,41 @@ class ScenarioResponse(BaseModel):
 
 
 def _edge_id(index: int) -> str:
-   """The stored-edge index as an id. Zero-padded so ids sort as they load."""
+   """The stored-edge index as an id.
+
+   Zero-padded to two digits, which keeps ids the same width -- and so
+   lexically ordered -- on every dataset the unit ships. A file with more
+   than a hundred edges would widen and lose that; nothing draws such a
+   theater, and the id remains unique and contiguous regardless.
+   """
    return f"e{index:02d}"
+
+
+def _node_out(node: Node) -> NodeOut:
+   return NodeOut(id=node.id, kind=node.kind, quantity=node.quantity,
+                  label=node.label, x=node.x, y=node.y)
+
+
+def _edge_out(index: int, edge: Edge) -> EdgeOut:
+   return EdgeOut(id=_edge_id(index), src=edge.src, dst=edge.dst, cap=edge.cap,
+                  cost=edge.cost, risk=edge.risk, bidirectional=edge.bidirectional)
+
+
+def _disruption_out(disruption: Disruption) -> DisruptionOut:
+   return DisruptionOut(kind=disruption.kind, src=disruption.src,
+                        dst=disruption.dst, node=disruption.node,
+                        factor=disruption.factor, value=disruption.value,
+                        note=disruption.note)
+
+
+def _threat_picture_out(sc: Scenario, name: str) -> ThreatPictureOut:
+   return ThreatPictureOut(
+      disruptions=[_disruption_out(d) for d in sc.threat_pictures[name]],
+      changes=[
+         EdgeChangeOut(id=_edge_id(c.index), cap=c.cap, risk=c.risk)
+         for c in sc.edge_changes(name)
+      ],
+   )
 
 
 # ---- endpoints --------------------------------------------------------------
@@ -253,33 +279,13 @@ def scenario(dataset: Optional[str] = DATASET_QUERY) -> ScenarioResponse:
       total_supply=net.total_supply(),
       total_demand=net.total_demand(),
       network=NetworkOut(
-         nodes=[
-            NodeOut(id=n.id, kind=n.kind.value, quantity=n.quantity,
-                    label=n.label, x=n.x, y=n.y)
-            for n in net.nodes.values()
-         ],
+         nodes=[_node_out(n) for n in net.nodes.values()],
          # `net.edges`, not `net.directed_edges()`: the stored edges are the
          # contract, and the expansion is the solver's business.
-         edges=[
-            EdgeOut(id=_edge_id(i), src=e.src, dst=e.dst, cap=e.cap,
-                    cost=e.cost, risk=e.risk, bidirectional=e.bidirectional)
-            for i, e in enumerate(net.edges)
-         ],
+         edges=[_edge_out(i, e) for i, e in enumerate(net.edges)],
       ),
       threat_pictures={
-         name: ThreatPictureOut(
-            disruptions=[
-               DisruptionOut(kind=d.kind.value, src=d.src, dst=d.dst,
-                             node=d.node, factor=d.factor, value=d.value,
-                             note=d.note)
-               for d in declarations
-            ],
-            changes=[
-               EdgeChangeOut(id=_edge_id(c.index), cap=c.cap, risk=c.risk)
-               for c in sc.edge_changes(name)
-            ],
-         )
-         for name, declarations in sc.threat_pictures.items()
+         name: _threat_picture_out(sc, name) for name in sc.threat_pictures
       },
    )
 

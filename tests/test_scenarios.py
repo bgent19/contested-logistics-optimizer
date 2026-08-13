@@ -93,6 +93,16 @@ def test_authored_coordinates_survive_a_round_trip(filename, tmp_path):
         )
 
 
+@pytest.mark.parametrize("half", [{"x": 10.0}, {"y": 10.0}], ids=["x_only", "y_only"])
+def test_half_a_coordinate_is_refused(half):
+    # Half a coordinate is worse than none: a layout can neither place the
+    # node nor tell that it is supposed to. Refused beside the other field
+    # invariants, so the registry's eager scan catches a half-authored file
+    # at startup and names it.
+    with pytest.raises(ValueError, match="x and y"):
+        Node(id="LOPSIDED", kind="transit", **half)
+
+
 def test_unauthored_nodes_serialise_as_null():
     # Both shipped datasets are fully authored, so the round-trip test above
     # never reaches this branch. A layout needs to be able to tell "placed at

@@ -16,7 +16,6 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
 from clopt import api
 from clopt.datasets import DEFAULT_DATA_PATH, DatasetLoadError, build_registry
@@ -253,13 +252,25 @@ def test_node_coordinates_are_both_or_neither(payload, raw):
         )
 
 
-def test_half_a_coordinate_is_refused_rather_than_shipped():
-    # Both shipped files are fully authored, so the assertion above never
-    # reaches this branch -- it would pass on a model that did not check.
-    # The refusal is what makes a half-authored file a CI failure via the
-    # per-dataset tests above, instead of a node the frontend cannot place.
-    with pytest.raises(ValidationError):
-        api.NodeOut(id="LOPSIDED", kind="transit", quantity=0.0, label="", x=10.0)
+def test_a_half_authored_coordinate_stops_the_server_at_startup(tmp_path):
+    """Both shipped files are fully authored, so the assertion above never
+    reaches this branch -- it would pass on a server that did not check.
+
+    The refusal belongs at load time, not response time: an instructor
+    authoring a fourth theater should be told by a server that will not start
+    and names the file, rather than by a 500 on the first request in front of
+    a class. That is the same bargain the registry already strikes.
+    """
+    scenario = _minimal_scenario()
+    scenario["network"]["nodes"][0]["x"] = 10  # ... and no y.
+    path = tmp_path / "lopsided.json"
+    path.write_text(json.dumps(scenario), encoding="utf-8")
+
+    with pytest.raises(DatasetLoadError) as exc:
+        build_registry(data_dir=str(tmp_path), default_path=str(path))
+
+    assert "lopsided.json" in str(exc.value)
+    assert "x and y" in str(exc.value)
 
 
 @PAYLOAD_CASES
@@ -295,13 +306,14 @@ def test_every_threat_picture_carries_disruptions_and_changes(payload, raw):
 
 @pytest.mark.parametrize("dataset_id", DATASET_IDS)
 def test_changes_agree_with_applying_the_disruptions_in_the_core(dataset_id):
-    """The redundancy this endpoint deliberately ships, checked against the core.
+    """The *wiring* from `Scenario.under` out to the payload -- not the arithmetic.
 
-    `changes` exists so the frontend never reimplements disruption arithmetic
-    in JavaScript -- five kinds, remove-node's zero-every-incident-edge
-    semantics, and a risk clamp. A divergence would put a capacity on the
-    projector that the API disagrees with, mid-class, silently. So the test
-    recomputes the diff from `Scenario.under`, which is the arithmetic itself.
+    This mirrors `Scenario.edge_changes`, so it cannot tell you the diffing
+    is correct; what it pins is that every changed edge reaches the payload,
+    under the right threat picture's key, with the right `e00` id. The
+    arithmetic is checked where it cannot be circular: literally, against
+    hand-worked numbers in the test below, and per disruption kind in
+    `tests/test_threat_changes.py`.
     """
     payload = _payload(dataset_id)
     scenario = api.get_registry().scenario(dataset_id)
