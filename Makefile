@@ -27,7 +27,9 @@ run:
 
 # A guided tour: baseline, a risk-averse plan, the Pareto sweep, and a disruption.
 demo:
-	@echo "== Baseline allocation (lambda=0) =="
+	@echo "== Day 1: the naive plan, and why it cannot be executed =="
+	PYTHONPATH=src $(PYTHON) -m clopt.cli naive --data $(DATA) --risk-aversion 0
+	@echo "\n== Baseline allocation (lambda=0) =="
 	PYTHONPATH=src $(PYTHON) -m clopt.cli allocate --data $(DATA) --risk-aversion 0
 	@echo "\n== Risk-averse allocation (lambda=25) =="
 	PYTHONPATH=src $(PYTHON) -m clopt.cli allocate --data $(DATA) --risk-aversion 25

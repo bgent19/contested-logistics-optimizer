@@ -5,6 +5,7 @@ Examples
     clopt info        --data data/theater_sample.json
     clopt allocate    --data data/theater_sample.json --risk-aversion 0
     clopt allocate    --data data/theater_sample.json --threat strait_mined
+    clopt naive       --data data/theater_sample.json --risk-aversion 0
     clopt route       --data data/theater_sample.json --from HUB-ALPHA --to FOB-KILO --safest
     clopt sweep       --data data/theater_sample.json --lambdas 0,1,5,25,100
 """
@@ -16,7 +17,7 @@ import json
 import sys
 from typing import List
 
-from .routing import cheapest_path, safest_path
+from .routing import cheapest_path, naive_plan, safest_path
 from .scenario import load_scenario
 from .solver import pareto_sweep, solve_allocation
 from .throughput import max_flow_min_cut
@@ -110,6 +111,81 @@ def cmd_route(args) -> int:
    print(f"Path: {'->'.join(r.path)} ({r.hops} hops)")
    print(f"Transit cost: {r.total_cost:g}")
    print(f"Survival probability: {r.survival * 100:.1f}%")
+   return 0
+
+
+def cmd_naive(args) -> int:
+   _, net = _load(args)
+   plan = naive_plan(net, risk_aversion=args.risk_aversion)
+   if args.json:
+      print(json.dumps({
+         "risk_aversion": plan.risk_aversion,
+         "notional_cost": plan.notional_cost,
+         "unserved": plan.unserved,
+         "convoys": [
+            {"dst": c.dst, "origin": c.origin, "quantity": c.quantity,
+             "path": c.path, "total_cost": c.total_cost,
+             "total_effective": c.total_effective, "found": c.found}
+            for c in plan.convoys
+         ],
+         "lanes": [
+            {"src": l.src, "dst": l.dst, "load": l.load, "cap": l.cap,
+             "over": l.over, "overage": l.overage}
+            for l in plan.lanes
+         ],
+         "sources": [
+            {"id": s.id, "dispatched": s.dispatched, "stock": s.stock,
+             "over": s.over, "overage": s.overage}
+            for s in plan.sources
+         ],
+      }, indent=2))
+      return 0
+
+   print(f"Naive plan -- each base served by its own cheapest hub "
+         f"(lambda={plan.risk_aversion:g})\n")
+   print("Convoys (one per demand node, routed as if it were the only one):")
+   print(f"  {'destination':<12}{'from':<12}{'qty':>6}{'unit':>7}  path")
+   for c in plan.convoys:
+      if not c.found:
+         print(f"  {c.dst:<12}{'--':<12}{c.quantity:>6g}{'--':>7}  "
+               f"UNREACHABLE")
+         continue
+      print(f"  {c.dst:<12}{c.origin:<12}{c.quantity:>6g}{c.total_cost:>7g}"
+            f"  {' -> '.join(c.path)}")
+
+   violations = [l for l in plan.lanes if l.over]
+   print("\nLanes over capacity:")
+   if violations:
+      print(f"  {'lane':<26}{'load':>7}{'cap':>7}{'over by':>9}")
+      for l in sorted(violations, key=lambda x: -x.overage):
+         lane = f"{l.src} -> {l.dst}"
+         print(f"  {lane:<26}{l.load:>7g}{l.cap:>7g}{l.overage:>9g}")
+   else:
+      print("  (none -- every lane can carry what this plan puts on it)")
+
+   print("\nSource ledger (every hub, idle ones included):")
+   print(f"  {'hub':<14}{'dispatch':>9}{'stock':>7}{'over by':>9}")
+   for s in plan.sources:
+      flag = f"{s.overage:g}" if s.over else "-"
+      print(f"  {s.id:<14}{s.dispatched:>9g}{s.stock:>7g}{flag:>9}")
+
+   print(f"\nNotional cost: {plan.notional_cost:.2f}")
+   if plan.unserved:
+      print(f"Unserved demand: {plan.unserved:g} (no route exists)")
+   print("Notional because this plan cannot be executed: the lanes and hubs")
+   print("above are oversubscribed, so nothing here is a price anyone can pay.")
+   if not plan.risk_aversion:
+      print("Compare `clopt allocate --risk-aversion 0`: the feasible optimum")
+      print("costs 1250 against this 1080 on the sample theater. That gap is")
+      print("what buildability costs -- and it is the whole of Day 1.")
+   else:
+      # At lambda > 0 the naive plan is routing on cost + lambda*risk, so
+      # its *raw* transit cost can exceed the feasible optimum's while it
+      # still undercuts on the blended yardstick it actually minimized.
+      # Pointing at the raw numbers here would state a false comparison.
+      print("At lambda > 0 compare blended costs, not this raw one: the naive")
+      print("plan minimized cost + lambda*risk, so its transit cost alone can")
+      print("read higher than a feasible plan's while still being unbuildable.")
    return 0
 
 
@@ -264,6 +340,14 @@ def build_parser() -> argparse.ArgumentParser:
    sp.add_argument("--safest", action="store_true",
                    help="Maximize survival probability instead of minimizing cost.")
    sp.set_defaults(func=cmd_route)
+
+   sp = sub.add_parser("naive",
+                       help="The Day 1 counterexample: cheapest-path-per-base, "
+                            "and what it oversubscribes.")
+   add_common(sp)
+   sp.add_argument("--risk-aversion", "--lambda", dest="risk_aversion",
+                   type=float, default=0.0, help="Risk/cost trade dial (lambda)")
+   sp.set_defaults(func=cmd_naive)
 
    sp = sub.add_parser("sweep", help="Trace the cost/risk Pareto frontier.")
    add_common(sp)
