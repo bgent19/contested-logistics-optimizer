@@ -416,6 +416,69 @@ def test_the_payload_is_a_documented_schema_not_a_bare_dict():
     assert {"node_count", "edge_count", "network", "threat_pictures"} <= set(properties)
 
 
+# ---- the sweep carries the plans it describes -------------------------------
+# Day 1's A/B flip needs the *optimum* in hand at every lambda before the first
+# keypress, and the frontend renders synchronously -- a keypress can never await
+# a fetch. So the sweep stopped being a scalar summary and became everything
+# about the optimum at each lambda.
+LEG_FIELDS = {"src", "dst", "flow", "cost", "risk"}
+
+SWEEP_LAMBDAS = [0.0, 10.0, 25.0]
+SWEEP_QUERY = ",".join(str(lam) for lam in SWEEP_LAMBDAS)
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_sweep_returns_one_row_per_requested_lambda(dataset_id):
+    rows = client.get(
+        "/sweep", params={"lambdas": SWEEP_QUERY, "dataset": dataset_id}
+    ).json()
+    assert [row["risk_aversion"] for row in rows] == SWEEP_LAMBDAS
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_every_sweep_row_carries_the_legs_of_its_plan(dataset_id):
+    rows = client.get(
+        "/sweep", params={"lambdas": SWEEP_QUERY, "dataset": dataset_id}
+    ).json()
+    for row in rows:
+        assert "legs" in row, row
+        # Non-emptiness is tied to the row delivering something, not asserted
+        # flat: a fully interdicted theater optimally moves nothing, and that
+        # is a correct empty plan, not a missing one.
+        if row["fill_rate"] > 0:
+            assert row["legs"], f"lambda {row['risk_aversion']} delivered with no legs"
+        for leg in row["legs"]:
+            assert set(leg) == LEG_FIELDS
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_sweep_legs_are_the_same_plan_allocate_serves_at_that_lambda(dataset_id):
+    # The whole point of folding legs in: the prefetched row and the one-lambda
+    # call must be the same plan, or the flip would show the class something
+    # /allocate disagrees with.
+    rows = client.get(
+        "/sweep", params={"lambdas": SWEEP_QUERY, "dataset": dataset_id}
+    ).json()
+    for row in rows:
+        allocation = client.get(
+            "/allocate",
+            params={"risk_aversion": row["risk_aversion"], "dataset": dataset_id},
+        ).json()
+        assert row["legs"] == allocation["legs"]
+
+
+def test_allocate_response_shape_is_untouched():
+    # The sweep grew; /allocate did not. Pinned because the frontend's A side
+    # and B side are read from the two endpoints interchangeably.
+    body = client.get("/allocate", params={"risk_aversion": 10}).json()
+    assert set(body) == {
+        "risk_aversion", "delivered", "total_demand", "fill_rate",
+        "transit_cost", "risk_exposure", "blended_cost", "legs",
+    }
+    for leg in body["legs"]:
+        assert set(leg) == LEG_FIELDS
+
+
 # ---- the registry itself ----------------------------------------------------
 def test_registry_scans_the_data_directory_eagerly(tmp_path):
     # Every file is in memory before anything asks for it. Deleting the file
