@@ -1,0 +1,31 @@
+# Run the full test suite on every push and every pull request.
+#
+# The point is that the repo cannot sit silently red. Before this existed, the
+# suite fired only when someone typed `make test` -- and it was once found
+# broken on main, unnoticed, by someone chasing an unrelated bug.
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The algorithmic core is stdlib-only; the api extra brings FastAPI (the
+      # REST surface under test) and dev brings pytest + httpx.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[api,dev]"
+
+      # The full suite -- no subset, no markers, no continue-on-error.
+      - name: Run tests
+        run: python -m pytest -q
