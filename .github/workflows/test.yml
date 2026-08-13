@@ -1,13 +1,31 @@
-# Run the full test suite on every push and every pull request.
+# Run the full test suite on every push.
 #
 # The point is that the repo cannot sit silently red. Before this existed, the
 # suite fired only when someone typed `make test` -- and it was once found
 # broken on main, unnoticed, by someone chasing an unrelated bug.
 name: tests
 
+# `push` alone, and unscoped. It used to be `push` plus `pull_request`, which ran
+# the suite twice per commit on a same-repo pull request; runs attach to a commit
+# SHA, so the `push` run is already the check the pull request displays. Leaving
+# it unscoped is what keeps a branch with no pull request open tested.
+#
+# Two costs, taken knowingly: a pull request from a fork gets no run at all, and
+# a merge-only breakage is caught by the run on main just after the merge rather
+# than before it. Restoring `pull_request` is the fix for either, if they bite.
 on:
   push:
-  pull_request:
+
+# One run per branch, not one per push -- a second push cancels the first run
+# mid-flight rather than leaving it to burn.
+#
+# On main the key includes the SHA, so every landed commit gets its own group and
+# none can cancel another. `cancel-in-progress: false` would not do this: a group
+# holds only one pending run, so a third merge would cancel the second out of the
+# queue and that commit would reach main untested.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name == 'main' && github.sha || github.ref_name }}
+  cancel-in-progress: true
 
 # Running tests needs nothing but the code.
 permissions:
