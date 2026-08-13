@@ -25,7 +25,7 @@ from pydantic import BaseModel
 from .datasets import DatasetRegistry, build_registry
 from .routing import cheapest_path, safest_path
 from .scenario import Scenario
-from .solver import solve_allocation, pareto_sweep
+from .solver import AllocationResult, solve_allocation, pareto_sweep
 from .throughput import max_flow_min_cut
 from .interdiction import budget_interdiction, min_cut_interdiction
 
@@ -84,7 +84,7 @@ class Leg(BaseModel):
    risk: float
 
 
-def _legs(res) -> List[Leg]:
+def _legs(res: AllocationResult) -> List[Leg]:
    """The moving legs of a solved allocation, in wire form.
 
    Shared by /allocate and /sweep so the prefetched row and the one-lambda

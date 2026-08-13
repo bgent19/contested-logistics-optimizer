@@ -166,7 +166,11 @@ def test_every_sweep_row_carries_the_legs_of_its_plan(dataset_id):
     ).json()
     for row in rows:
         assert "legs" in row, row
-        assert row["legs"], f"lambda {row['risk_aversion']} moved nothing"
+        # Non-emptiness is tied to the row delivering something, not asserted
+        # flat: a fully interdicted theater optimally moves nothing, and that
+        # is a correct empty plan, not a missing one.
+        if row["fill_rate"] > 0:
+            assert row["legs"], f"lambda {row['risk_aversion']} delivered with no legs"
         for leg in row["legs"]:
             assert set(leg) == LEG_FIELDS
 
