@@ -18,7 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from clopt import api
-from clopt.datasets import DatasetLoadError, build_registry
+from clopt.datasets import DEFAULT_DATA_PATH, DatasetLoadError, build_registry
 
 client = TestClient(api.app)
 
@@ -69,9 +69,26 @@ def test_dataset_ids_are_filename_stems_not_display_names():
 
 
 def test_datasets_cycle_order_is_default_then_alphabetical():
+    # The head is pinned to the *environment's* default, not to the registry
+    # that produced the list -- asking the registry whether it agrees with
+    # itself would pass no matter which file it picked.
+    expected_default = os.path.splitext(
+        os.path.basename(os.environ.get("CLOPT_DATA", DEFAULT_DATA_PATH))
+    )[0]
     remainder = DATASET_IDS[1:]
-    assert DATASET_IDS[0] == api.get_registry().default_id
+    assert DATASET_IDS[0] == expected_default
     assert remainder == sorted(remainder)
+
+
+def test_the_shipped_theaters_are_addressable_by_their_stems():
+    # The one place literal ids are pinned: every URL in the README, the
+    # Makefile, and the frontend spells these. A third theater lands without
+    # touching this test.
+    registry = build_registry(
+        data_dir=DATA, default_path=os.path.join(DATA, "theater_sample.json")
+    )
+    assert registry.ids[0] == "theater_sample"
+    assert "textbook_maxflow" in registry.ids[1:]
 
 
 def test_datasets_entries_carry_only_id_name_description():
@@ -146,6 +163,25 @@ def test_a_file_that_will_not_load_fails_loudly_by_name(tmp_path):
     with pytest.raises(DatasetLoadError) as exc:
         build_registry(data_dir=str(tmp_path), default_path=str(good))
     assert "broken_theater.json" in str(exc.value)
+
+
+def test_a_missing_data_directory_names_the_directory_it_looked_for(tmp_path):
+    # The likeliest startup failure of all: the server launched from the
+    # wrong working directory. `os.listdir` alone would name nothing.
+    missing = str(tmp_path / "not_the_repo_root" / "data")
+    with pytest.raises(DatasetLoadError) as exc:
+        build_registry(data_dir=missing)
+    assert missing in str(exc.value)
+
+
+def test_two_files_claiming_one_stem_refuse_to_start(tmp_path):
+    # A CLOPT_DATA path outside data/ joins under its own stem -- unless that
+    # stem is already taken, in which case the id would be ambiguous.
+    collision = tmp_path / "theater_sample.json"
+    collision.write_text(json.dumps(_minimal_scenario()), encoding="utf-8")
+    with pytest.raises(DatasetLoadError) as exc:
+        build_registry(data_dir=DATA, default_path=str(collision))
+    assert "theater_sample" in str(exc.value)
 
 
 def test_data_path_outside_the_data_directory_joins_under_its_own_stem(tmp_path):

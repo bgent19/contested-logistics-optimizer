@@ -70,7 +70,9 @@ def _net_for(dataset: Optional[str], threat: Optional[str]):
    try:
       return sc.under(threat)
    except KeyError as exc:
-      raise HTTPException(status_code=404, detail=str(exc))
+      # `str(KeyError)` is the message's *repr*, quotes and all; unwrap it so
+      # an unknown threat and an unknown dataset read the same way in JSON.
+      raise HTTPException(status_code=404, detail=str(exc.args[0]))
 
 
 # ---- response models --------------------------------------------------------

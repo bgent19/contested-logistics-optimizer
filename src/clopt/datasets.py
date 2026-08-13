@@ -67,8 +67,12 @@ class DatasetRegistry:
       by_id: Dict[str, Dataset] = {}
       for ds in datasets:
          if ds.id in by_id:
+            # Two files with the same stem -- e.g. CLOPT_DATA naming a
+            # theater_sample.json somewhere else. Ambiguous ids are worse
+            # than a refusal to start, and renaming one file fixes it.
             raise DatasetLoadError(
-               f"Duplicate dataset id '{ds.id}': {by_id[ds.id].path} and {ds.path}."
+               f"Two datasets claim the id '{ds.id}': "
+               f"{by_id[ds.id].path} and {ds.path}. Rename one; ids are filename stems."
             )
          by_id[ds.id] = ds
       if default_id not in by_id:
@@ -98,11 +102,9 @@ class DatasetRegistry:
          )
       return self._by_id[dataset_id].scenario
 
-   def __contains__(self, dataset_id: object) -> bool:
-      return dataset_id in self._by_id
 
-   def __len__(self) -> int:
-      return len(self._by_id)
+def _stem(path: str) -> str:
+   return os.path.splitext(os.path.basename(path))[0]
 
 
 def _load(path: str) -> Dataset:
@@ -110,7 +112,7 @@ def _load(path: str) -> Dataset:
       scenario = load_scenario(path)
    except Exception as exc:  # noqa: BLE001 -- the point is to name the file
       raise DatasetLoadError(f"{path}: {type(exc).__name__}: {exc}") from exc
-   return Dataset(id=os.path.splitext(os.path.basename(path))[0], path=path, scenario=scenario)
+   return Dataset(id=_stem(path), path=path, scenario=scenario)
 
 
 def build_registry(
@@ -126,6 +128,15 @@ def build_registry(
    if default_path is None:
       default_path = os.environ.get("CLOPT_DATA", DEFAULT_DATA_PATH)
 
+   if not os.path.isdir(data_dir):
+      # Almost always a server started from the wrong working directory.
+      # Say which directory was looked for, in full, rather than letting a
+      # bare FileNotFoundError out of listdir.
+      raise DatasetLoadError(
+         f"No dataset directory at '{os.path.abspath(data_dir)}' "
+         f"(cwd is {os.getcwd()})."
+      )
+
    paths = [
       os.path.join(data_dir, f)
       for f in sorted(os.listdir(data_dir))
@@ -135,6 +146,4 @@ def build_registry(
    if os.path.realpath(default_path) not in known:
       paths.append(default_path)
 
-   datasets = [_load(p) for p in paths]
-   default_id = os.path.splitext(os.path.basename(default_path))[0]
-   return DatasetRegistry(datasets, default_id)
+   return DatasetRegistry([_load(p) for p in paths], _stem(default_path))
