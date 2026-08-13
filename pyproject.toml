@@ -12,12 +12,20 @@ readme = "README.md"
 # runtime students get. This once read ">=3.10", which nothing ever verified;
 # a support claim nobody checks is worse than a narrower one that is true.
 #
+# One input was NOT checked when this was decided: what Python the lab
+# machines and student laptops actually have. The call was made on the repo
+# side alone (3.12 is what CI and the image run, and 3.10 is end-of-life in
+# October 2026). If a student turns up on 3.11, that is the evidence this
+# decision lacked -- widen it rather than working around it.
+#
 # Widening this is a real option, not a forbidden one -- but widening it alone
 # is not. `tests/test_python_version_claims.py` fails until the workflow runs
 # the new floor too, so the claim and the evidence move together.
 requires-python = ">=3.12"
 
+# Kept in step with the workflow by `test_classifiers_match_the_versions_ci_runs`.
 classifiers = [
+  "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
 ]
 license = { text = "MIT" }
