@@ -4,51 +4,74 @@ Run with:
     uvicorn clopt.api:app --reload
 or via the Makefile / Docker. Interactive docs at /docs.
 
-The API loads a scenario file at startup (path from the CLOPT_DATA env var,
-defaulting to data/theater_sample.json) and serves allocation, routing, and
-Pareto-sweep queries against it. The same in-memory `Scenario` is reused; each
-request applies its threat picture to a fresh copy, so requests never leak state.
+The API loads *every* dataset in `data/` at startup (plus whatever CLOPT_DATA
+names, if that path lives elsewhere) and serves allocation, routing, and
+Pareto-sweep queries against any of them: each endpoint takes an optional
+`dataset` query parameter, defaulting to the CLOPT_DATA dataset. Loading is
+eager, so a file that will not load stops the server at start instead of
+becoming a mid-class 500 -- see `clopt.datasets`.
+
+The same in-memory `Scenario` is reused; each request applies its threat
+picture to a fresh copy, so requests never leak state.
 """
 
 from  __future__ import annotations
 
-import os
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
+from .datasets import DatasetRegistry, build_registry
 from .routing import cheapest_path, safest_path
-from .scenario import Scenario, load_scenario
+from .scenario import Scenario
 from .solver import solve_allocation, pareto_sweep
 from .throughput import max_flow_min_cut
 from .interdiction import budget_interdiction, min_cut_interdiction
 
-DATA_PATH = os.environ.get("CLOPT_DATA", "data/theater_sample.json")
-
 app = FastAPI(
    title="Contested-Logistics Routing Optimizer",
    version="0.1.0",
-   description="Risk-weighted min-cost-flow resupply planning over a contested etwork.",
+   description="Risk-weighted min-cost-flow resupply planning over a contested network.",
 )
 
-_scenario: Optional[Scenario] = None
+# Eager, at import: uvicorn refuses to start on a dataset that will not load,
+# and the traceback names the file.
+_registry: DatasetRegistry = build_registry()
+
+DATASET_QUERY = Query(None, description="Dataset id (filename stem); omit for the default.")
 
 
-def _get_scenario() -> Scenario:
-   global _scenario
-   if _scenario is None:
-      _scenario = load_scenario(DATA_PATH)
-   return _scenario
+def get_registry() -> DatasetRegistry:
+   return _registry
 
 
-def _net_for(threat: Optional[str]):
-   sc = _get_scenario()
+def use_registry(registry: DatasetRegistry) -> DatasetRegistry:
+   """Swap the served registry, returning the previous one.
+
+   The seam a test uses to serve a hand-built theater without reimporting
+   this module or reaching for the environment.
+   """
+   global _registry
+   previous = _registry
+   _registry = registry
+   return previous
+
+
+def _scenario_for(dataset: Optional[str]) -> Scenario:
+   try:
+      return get_registry().scenario(dataset)
+   except KeyError as exc:
+      raise HTTPException(status_code=404, detail=str(exc.args[0]))
+
+
+def _net_for(dataset: Optional[str], threat: Optional[str]):
+   sc = _scenario_for(dataset)
    try:
       return sc.under(threat)
    except KeyError as exc:
       raise HTTPException(status_code=404, detail=str(exc))
-   
+
 
 # ---- response models --------------------------------------------------------
 class Leg(BaseModel):
@@ -86,15 +109,27 @@ class SweepRow(BaseModel):
    risk_exposure: float
 
 
+class DatasetSummary(BaseModel):
+   id: str
+   name: str
+   description: str
+
+
 # ---- endpoints --------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
    return {"status": "ok"}
 
 
+@app.get("/datasets", response_model=List[DatasetSummary])
+def datasets() -> List[DatasetSummary]:
+   """The dataset menu, in cycle order: default first, then alphabetical."""
+   return [DatasetSummary(**row) for row in get_registry().summaries()]
+
+
 @app.get("/scenario")
-def scenario() -> dict:
-   sc = _get_scenario()
+def scenario(dataset: Optional[str] = DATASET_QUERY) -> dict:
+   sc = _scenario_for(dataset)
    net = sc.network
    return {
       "name": sc.name,
@@ -111,8 +146,9 @@ def scenario() -> dict:
 def allocate(
    risk_aversion: float = Query(0.0, ge=0.0, description="Cost/risk trade dial (lambda)."),
    threat: Optional[str] = Query(None, description="Named threat picture."),
+   dataset: Optional[str] = DATASET_QUERY,
 ) -> AllocationResponse:
-   res = solve_allocation(_net_for(threat), risk_aversion=risk_aversion)
+   res = solve_allocation(_net_for(dataset, threat), risk_aversion=risk_aversion)
    return AllocationResponse(
       risk_aversion=res.risk_aversion,
       delivered=res.delivered,
@@ -133,8 +169,9 @@ def route(
    risk_aversion: float = Query(0.0, ge=0.0),
    safest: bool = Query(False, description="Maximize survival intead of minimizing cost."),
    threat: Optional[str] = Query(None),
+   dataset: Optional[str] = DATASET_QUERY,
 ) -> RouteResponse:
-   net = _net_for(threat)
+   net = _net_for(dataset, threat)
    if src not in net.nodes or dst not in net.nodes:
       raise HTTPException(status_code=404, detail="Unknown node id.")
    if safest:
@@ -153,12 +190,13 @@ def route(
 def sweep(
    lambdas: str = Query("0,1,2,5,10,25,50,100", description="Comma-separated lambda values."),
    threat: Optional[str] = Query(None),
+   dataset: Optional[str] = DATASET_QUERY,
 ) -> List[SweepRow]:
    try:
       values = [float(x) for x in lambdas.split(",")]
    except ValueError:
       raise HTTPException(status_code=400, detail="lambdas must be comma-separated numbers.")
-   results = pareto_sweep(_net_for(threat), values)
+   results = pareto_sweep(_net_for(dataset, threat), values)
    return [
       SweepRow(risk_aversion=r.risk_aversion, fill_rate=r.fill_rate,
                transit_cost=r.transit_cost, risk_exposure=r.risk_exposure)
@@ -167,8 +205,11 @@ def sweep(
 
 
 @app.get("/maxflow")
-def maxflow(threat: Optional[str] = Query(None)) -> dict:
-   res = max_flow_min_cut(_net_for(threat))
+def maxflow(
+   threat: Optional[str] = Query(None),
+   dataset: Optional[str] = DATASET_QUERY,
+) -> dict:
+   res = max_flow_min_cut(_net_for(dataset, threat))
    return {
       "max_throughput": res.value,
       "cut_capacity": res.cut_capacity,
@@ -184,8 +225,9 @@ def interdict(
                                  description="Max lanes to remove; omit for min-cut interdiction."),
    method: str = Query("auto", pattern="^(auto|exhaustive|greedy)$"),
    threat: Optional[str] = Query(None),
+   dataset: Optional[str] = DATASET_QUERY,
 ) -> dict:
-   net = _net_for(threat)
+   net = _net_for(dataset, threat)
    if budget is None:
       inter = min_cut_interdiction(net)
       return {

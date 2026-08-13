@@ -260,12 +260,25 @@ make api      # uvicorn clopt.api:app  ->  http://localhost:8000/docs
 
 | endpoint | purpose |
 |----------|---------|
+| `GET /datasets` | the dataset menu: `id`, `name`, `description` |
 | `GET /scenario` | theater summary and available threat pictures |
 | `GET /allocate?risk_aversion=&threat=` | full allocation plan with per-leg flow |
 | `GET /route?from=&to=&safest=&threat=` | single-convoy path |
 | `GET /sweep?lambdas=&threat=` | cost/risk frontier rows |
 | `GET /maxflow?threat=` | max throughput + min-cut certificate |
 | `GET /interdict?budget=&method=&threat=` | adversary's cheapest blockade |
+
+One server serves every theater. Each endpoint above also takes an optional
+`dataset=` parameter naming a dataset id -- the **filename stem** of a file in
+`data/`, e.g. `dataset=textbook_maxflow` -- so switching from the textbook
+network to the theater mid-class is a query parameter, not a restart. Omitting
+it is exactly equivalent to naming the `CLOPT_DATA` dataset, which is also the
+first entry `/datasets` returns (the rest follow alphabetically, so cycling
+forward in the frontend always moves away from home). An unknown id is a 404.
+
+Every dataset is loaded at startup, not on first request: a file that will not
+load stops the server immediately and the error names the file, rather than
+surfacing as a 500 halfway through a class.
 
 Interactive Swagger docs are served at `/docs`.
 
@@ -283,6 +296,7 @@ src/clopt/
   routing.py      # risk-weighted Dijkstra + max-survival path  <- Day 1
   solver.py       # build flow from a Network, decompose cost/risk, Pareto sweep
   scenario.py     # JSON load/save + validation
+  datasets.py     # eager registry of every theater in data/, keyed by stem
   cli.py          # argparse CLI
   api.py          # FastAPI app
 data/
@@ -293,6 +307,8 @@ tests/
   test_routing.py            # cheapest vs safest path behavior
   test_solver.py             # end-to-end fill/cost/risk + disruptions + Pareto
   test_maxflow_interdiction.py  # Edmonds-Karp = 7, min-cut certificate, interdiction
+  test_scenarios.py          # every file in data/ loads and its threats apply
+  test_api_contract.py       # HTTP contract: dataset ids, cycle order, 404s
 docs/
   DESIGN_WALKTHROUGH.md  # how and in what order the repo was built, and why
 ```
