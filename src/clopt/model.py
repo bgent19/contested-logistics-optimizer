@@ -173,6 +173,24 @@ class Disruption:
                e.risk = max(0.0, min(1.0, e.risk * self.factor))
 
 
+@dataclass(frozen=True)
+class EdgeChange:
+   """What a threat picture did to one stored edge, as an absolute result.
+
+   `index` is the edge's position in `Network.edges` -- the same index the API
+   spells `e00`, `e01`. An index rather than a `src`/`dst` pair because the
+   model permits parallel edges, so a pair is not guaranteed to identify one.
+
+   The values are the *post*-disruption ones, not deltas, so a consumer
+   overwrites rather than recomputing. Both are carried even when only one
+   moved: an edge that lost its capacity still has a risk worth drawing.
+   """
+
+   index: int
+   cap: float
+   risk: float
+
+
 @dataclass
 class Scenario:
    name: str
@@ -197,3 +215,21 @@ class Scenario:
       for d in self.threat_pictures[threat]:
          d.apply(net)
       return net
+
+   def edge_changes(self, threat: str) -> List[EdgeChange]:
+      """Which stored edges the named threat picture moved, and to what.
+
+      Computed by applying the picture and diffing against the pristine
+      network, so this is the disruption arithmetic itself rather than a
+      second reading of it. Declarations do not map cleanly onto edges in any
+      case: one `remove_node` zeroes every incident edge, and a declaration
+      that matches nothing changes none.
+
+      `under` deep-copies, so the two edge lists stay index-aligned.
+      """
+      disrupted = self.under(threat)
+      return [
+         EdgeChange(index=i, cap=after.cap, risk=after.risk)
+         for i, (before, after) in enumerate(zip(self.network.edges, disrupted.edges))
+         if (before.cap, before.risk) != (after.cap, after.risk)
+      ]

@@ -16,6 +16,7 @@ import os
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from clopt import api
 from clopt.datasets import DEFAULT_DATA_PATH, DatasetLoadError, build_registry
@@ -138,6 +139,269 @@ def test_datasets_endpoint_serves_the_dataset_the_scenario_endpoint_does():
     for entry in CATALOG:
         summary = client.get("/scenario", params={"dataset": entry["id"]}).json()
         assert summary["name"] == entry["name"]
+
+
+# ---- the /scenario payload --------------------------------------------------
+# `/scenario` is the endpoint the frontend draws from, so what is pinned here
+# is the drawable payload: the stored edges and nothing but the stored edges,
+# ids that index into the file's own edge order, and every threat picture's
+# effects already computed. The numbers are the file's; the shapes are ours.
+def _raw(dataset_id):
+    with open(os.path.join(DATA, f"{dataset_id}.json"), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _payload(dataset_id):
+    response = client.get("/scenario", params={"dataset": dataset_id})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+PAYLOADS = [(i, _payload(i), _raw(i)) for i in DATASET_IDS]
+PAYLOAD_CASES = pytest.mark.parametrize(
+    "payload,raw", [(p, r) for _, p, r in PAYLOADS], ids=[i for i, _, _ in PAYLOADS]
+)
+
+
+@PAYLOAD_CASES
+def test_counts_are_integers_and_the_arrays_live_under_network(payload, raw):
+    # The rename that forced itself: `nodes` cannot mean both an integer and
+    # an array, so the summary keys became `node_count`/`edge_count` and the
+    # arrays moved inside `network`.
+    assert payload["node_count"] == len(raw["network"]["nodes"])
+    assert payload["edge_count"] == len(raw["network"]["edges"])
+    assert isinstance(payload["network"]["nodes"], list)
+    assert isinstance(payload["network"]["edges"], list)
+
+
+@PAYLOAD_CASES
+def test_ships_the_stored_edges_and_never_a_reverse_arc(payload, raw):
+    """The single most costly thing this endpoint could get wrong.
+
+    A bidirectional lane is one stored edge that the *solver* expands into two
+    directed arcs. If the payload shipped the expansion, every such lane would
+    be drawn twice, and an interdiction result naming one of the pair would
+    mean "this arc" when the model's truth is "both arcs". Twelve edges on the
+    theater, seven on the textbook -- the file's own count, expansion or no.
+    """
+    stored = [(e["src"], e["dst"]) for e in raw["network"]["edges"]]
+    shipped = [(e["src"], e["dst"]) for e in payload["network"]["edges"]]
+
+    assert shipped == stored
+
+    # Belt and braces: the reverse of a bidirectional lane must not appear as
+    # an entry of its own, which `shipped == stored` only catches while no
+    # file happens to author both directions separately.
+    bidirectional = [
+        (e["src"], e["dst"])
+        for e in raw["network"]["edges"]
+        if e.get("bidirectional", False)
+    ]
+    for src, dst in bidirectional:
+        assert (dst, src) not in shipped, (
+            f"reverse arc {dst}->{src} shipped; the frontend derives reverses "
+            f"and would draw this lane twice"
+        )
+
+
+def test_the_theater_bidirectional_lane_is_one_entry_not_two():
+    # Guards the guard above: it is only meaningful while some shipped file
+    # actually authors a bidirectional lane.
+    theater = _raw("theater_sample")
+    assert any(e.get("bidirectional") for e in theater["network"]["edges"])
+
+
+@PAYLOAD_CASES
+def test_edge_ids_are_contiguous_unique_and_zero_padded(payload, raw):
+    # The id *is* the stored-edge index, because the model permits parallel
+    # edges and a "src>dst" composite is not guaranteed unique.
+    ids = [e["id"] for e in payload["network"]["edges"]]
+    assert ids == [f"e{i:02d}" for i in range(len(raw["network"]["edges"]))]
+    assert len(set(ids)) == len(ids)
+
+
+@PAYLOAD_CASES
+def test_edges_carry_the_drawable_attributes_as_floats(payload, raw):
+    for shipped, stored in zip(payload["network"]["edges"], raw["network"]["edges"]):
+        assert isinstance(shipped["cap"], float)
+        assert isinstance(shipped["cost"], float)
+        assert isinstance(shipped["risk"], float)
+        assert shipped["cap"] == stored["cap"]
+        assert shipped["cost"] == stored["cost"]
+        assert shipped["risk"] == stored.get("risk", 0.0)
+        assert shipped["bidirectional"] == stored.get("bidirectional", False)
+
+
+@PAYLOAD_CASES
+def test_nodes_carry_id_kind_quantity_and_label(payload, raw):
+    shipped = {n["id"]: n for n in payload["network"]["nodes"]}
+    assert set(shipped) == {n["id"] for n in raw["network"]["nodes"]}
+    for stored in raw["network"]["nodes"]:
+        node = shipped[stored["id"]]
+        assert node["kind"] == stored["kind"]
+        assert node["quantity"] == float(stored.get("quantity", 0.0))
+        assert isinstance(node["quantity"], float)
+        assert node["label"] == stored.get("label", "")
+
+
+@PAYLOAD_CASES
+def test_node_coordinates_are_both_or_neither(payload, raw):
+    for node in payload["network"]["nodes"]:
+        assert (node["x"] is None) == (node["y"] is None), (
+            f"node {node['id']} carries half a coordinate; a layout cannot "
+            f"place it and cannot tell that it should place it"
+        )
+
+
+def test_half_a_coordinate_is_refused_rather_than_shipped():
+    # Both shipped files are fully authored, so the assertion above never
+    # reaches this branch -- it would pass on a model that did not check.
+    # The refusal is what makes a half-authored file a CI failure via the
+    # per-dataset tests above, instead of a node the frontend cannot place.
+    with pytest.raises(ValidationError):
+        api.NodeOut(id="LOPSIDED", kind="transit", quantity=0.0, label="", x=10.0)
+
+
+@PAYLOAD_CASES
+def test_authored_coordinates_reach_the_payload_untransformed(payload, raw):
+    authored = {
+        n["id"]: (n["x"], n["y"])
+        for n in raw["network"]["nodes"]
+        if n.get("x") is not None
+    }
+    if not authored:
+        pytest.skip("no node in this dataset carries an authored coordinate")
+    shipped = {n["id"]: (n["x"], n["y"]) for n in payload["network"]["nodes"]}
+    for node_id, position in authored.items():
+        assert shipped[node_id] == position
+
+
+def test_the_theater_chokepoint_sits_where_the_layout_search_put_it():
+    # STRAIT-3 at x=300 is the whole point of the layout work in #30: the
+    # chokepoint stays on ALPHA's side so the bypass reads as a bypass.
+    nodes = {n["id"]: n for n in _payload("theater_sample")["network"]["nodes"]}
+    assert (nodes["STRAIT-3"]["x"], nodes["STRAIT-3"]["y"]) == (300.0, 400.0)
+
+
+@PAYLOAD_CASES
+def test_every_threat_picture_carries_disruptions_and_changes(payload, raw):
+    # Holds vacuously on the textbook set, which declares no threat pictures.
+    assert set(payload["threat_pictures"]) == set(raw["threat_pictures"])
+    for name, picture in payload["threat_pictures"].items():
+        assert isinstance(picture["disruptions"], list)
+        assert isinstance(picture["changes"], list)
+        assert picture["disruptions"], f"{name}: declared with no disruptions"
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_changes_agree_with_applying_the_disruptions_in_the_core(dataset_id):
+    """The redundancy this endpoint deliberately ships, checked against the core.
+
+    `changes` exists so the frontend never reimplements disruption arithmetic
+    in JavaScript -- five kinds, remove-node's zero-every-incident-edge
+    semantics, and a risk clamp. A divergence would put a capacity on the
+    projector that the API disagrees with, mid-class, silently. So the test
+    recomputes the diff from `Scenario.under`, which is the arithmetic itself.
+    """
+    payload = _payload(dataset_id)
+    scenario = api.get_registry().scenario(dataset_id)
+    pristine = scenario.network
+    for name, picture in payload["threat_pictures"].items():
+        disrupted = scenario.under(name)
+        expected = {
+            f"e{i:02d}": (after.cap, after.risk)
+            for i, (before, after) in enumerate(zip(pristine.edges, disrupted.edges))
+            if (before.cap, before.risk) != (after.cap, after.risk)
+        }
+        actual = {c["id"]: (c["cap"], c["risk"]) for c in picture["changes"]}
+        assert actual == expected, f"{name}: changes disagree with Scenario.under"
+
+
+def test_the_theaters_changes_are_the_five_hand_checked_edges():
+    """Pinned literally, so the test cannot drift along with the code.
+
+    Recomputing from the core proves agreement; it does not prove the
+    arithmetic is right. These five are worked by hand off the file: two lanes
+    zeroed by the mining, BRAVO's one incident lane zeroed by the strike, and
+    the pressure picture's 90 -> 36 capacity and 0.30 -> 0.45 risk.
+    """
+    pictures = _payload("theater_sample")["threat_pictures"]
+    changes = {
+        name: {c["id"]: (c["cap"], c["risk"]) for c in p["changes"]}
+        for name, p in pictures.items()
+    }
+
+    assert changes["strait_mined"] == {"e01": (0.0, 0.45), "e06": (0.0, 0.40)}
+    assert changes["bravo_struck"] == {"e02": (0.0, 0.15)}
+    # `approx` on the scaled risk, not on the code: 0.30 * 1.5 really is
+    # 0.44999999999999996 in binary floating point, and the payload ships what
+    # the arithmetic produced rather than a rounded-off version of it. A
+    # projector caption is the frontend's place to format.
+    assert changes["j2_pressure"]["e03"] == (36.0, 0.10)
+    assert changes["j2_pressure"]["e09"] == pytest.approx((30.0, 0.45))
+    assert sum(len(c) for c in changes.values()) == 5
+
+
+def test_instructor_narration_survives_into_the_payload():
+    # `note` is instructor-written prose that nothing in the repo has ever
+    # rendered. On a projector it is the caption.
+    pictures = _payload("theater_sample")["threat_pictures"]
+    notes = [d["note"] for p in pictures.values() for d in p["disruptions"]]
+
+    assert all(notes), "a disruption reached the payload with its note stripped"
+    assert any("mined" in n for n in notes)
+
+    authored = {
+        d.get("note", "")
+        for ds in _raw("theater_sample")["threat_pictures"].values()
+        for d in ds
+    }
+    assert set(notes) == authored
+
+
+def test_disruption_declarations_keep_the_fields_that_identify_their_target():
+    pictures = _payload("theater_sample")["threat_pictures"]
+    by_kind = {
+        d["kind"]: d for p in pictures.values() for d in p["disruptions"]
+    }
+
+    assert by_kind["remove_edge"]["src"] and by_kind["remove_edge"]["dst"]
+    assert by_kind["remove_node"]["node"] == "HUB-BRAVO"
+    assert by_kind["scale_capacity"]["factor"] == 0.4
+
+
+@PAYLOAD_CASES
+def test_summary_fields_stay_a_strict_subset_of_the_grown_payload(payload, raw):
+    assert payload["name"] == raw["name"]
+    assert payload["description"] == raw["description"]
+    assert isinstance(payload["total_supply"], float)
+    assert isinstance(payload["total_demand"], float)
+
+
+def test_scenario_accepts_no_threat_parameter():
+    # The pristine network is returned always. Threat *effects* ship inside
+    # the payload, so a `threat` param would be a second way to say the same
+    # thing -- and the one the frontend would accidentally depend on.
+    params = client.app.openapi()["paths"]["/scenario"]["get"].get("parameters", [])
+    assert [p["name"] for p in params] == ["dataset"]
+
+
+def test_passing_a_threat_anyway_still_returns_the_pristine_network():
+    pristine = _payload("theater_sample")
+    with_threat = client.get(
+        "/scenario", params={"dataset": "theater_sample", "threat": "strait_mined"}
+    )
+    assert with_threat.status_code == 200
+    assert with_threat.json() == pristine
+
+
+def test_the_payload_is_a_documented_schema_not_a_bare_dict():
+    # Unlike the result endpoints, this is a contract, and /docs should say so.
+    schema = client.app.openapi()["paths"]["/scenario"]["get"]["responses"]["200"]
+    ref = schema["content"]["application/json"]["schema"]["$ref"]
+    name = ref.rsplit("/", 1)[-1]
+    properties = client.app.openapi()["components"]["schemas"][name]["properties"]
+    assert {"node_count", "edge_count", "network", "threat_pictures"} <= set(properties)
 
 
 # ---- the registry itself ----------------------------------------------------
