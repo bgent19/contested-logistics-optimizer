@@ -681,6 +681,176 @@ def test_naive_is_documented_at_docs_with_the_same_lambda_parameter_as_sweep():
     )
 
 
+# ---- /maxflow ships the whole Edmonds-Karp trace ----------------------------
+# Day 2 steps through the augmentations at the front of the room, forwards and
+# backwards, and the frontend renders synchronously -- so the whole trace ships
+# as one array on one request. No server-side cursor: each step is a complete
+# snapshot rather than a delta, which makes backward stepping an index
+# decrement and keeps the endpoint as stateless as the rest of the API.
+TRACE_STEP_FIELDS = {
+    "iteration", "path", "lane_residuals", "bottleneck", "total_after",
+    "forward_residual", "reverse_residual", "flows", "used_reverse",
+}
+UNTRACED_FIELDS = {"max_throughput", "cut_capacity", "source_side", "cut_lanes"}
+
+# Reserved ids for the super-source and super-sink. Scenario files use
+# uppercase-hyphen ids, so the dunder prefix cannot collide with a real node.
+SUPER_SOURCE = "__source__"
+SUPER_SINK = "__sink__"
+
+
+def _maxflow(dataset_id, **params):
+    """GET /maxflow, parsed as a browser would parse it.
+
+    `json.loads` with `parse_constant` rather than `response.json()`: the trace
+    is where `Infinity` would leak in, because the terminal arcs really are
+    built at infinity -- and Python's decoder would accept it happily while
+    `JSON.parse` throws away the whole response. See `NaiveConvoyOut`.
+    """
+    response = client.get("/maxflow", params={"dataset": dataset_id, **params})
+    assert response.status_code == 200, response.text
+    return json.loads(response.text, parse_constant=_reject_json_constant)
+
+
+def _traced(dataset_id, **params):
+    return _maxflow(dataset_id, trace="true", **params)["trace"]
+
+
+def _augmentations(steps):
+    return [step for step in steps if step["iteration"] > 0]
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_maxflow_without_trace_is_the_payload_it_always_was(dataset_id):
+    # `trace` defaults off and adds nothing when off -- not even a null key.
+    # The CLI, the README and Day 3's certificate all read this response.
+    assert set(_maxflow(dataset_id)) == UNTRACED_FIELDS
+    assert set(_maxflow(dataset_id, trace="false")) == UNTRACED_FIELDS
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_the_trace_is_one_array_of_iterations_plus_a_step_zero(dataset_id):
+    """`len(steps) == iterations + 1`, with step 0 present and empty.
+
+    Step 0 is the server's, not the frontend's. The uniform render rule is
+    *residuals from step k-1, path annotation from step k*; iteration 1 has no
+    k-1 to draw against, and synthesising one in JavaScript would put
+    residual-graph construction in the browser.
+    """
+    body = _maxflow(dataset_id, trace="true")
+    steps = body["trace"]
+    augmentations = _augmentations(steps)
+
+    assert len(steps) == len(augmentations) + 1
+    assert [step["iteration"] for step in steps] == list(range(len(steps)))
+    # The array is the iteration count the instructor says out loud: one entry
+    # per augmentation, which the frontend sub-steps into two beats itself.
+    assert sum(step["bottleneck"] for step in augmentations) == body["max_throughput"]
+    assert augmentations[-1]["total_after"] == body["max_throughput"]
+
+    zero = steps[0]
+    assert zero["path"] == [] and zero["lane_residuals"] == []
+    assert zero["bottleneck"] == 0 and zero["total_after"] == 0
+    assert zero["forward_residual"], "step 0 carries the initial residual graph"
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_every_step_carries_the_full_field_set(dataset_id):
+    for step in _traced(dataset_id):
+        assert set(step) == TRACE_STEP_FIELDS
+
+
+# The single most valuable assertion in this file. Two filters used to run in
+# the data layer purely to tidy CLI output, and dropping the unbounded terms
+# de-aligned `lane_residuals` from `path` -- so a `min(...)` term could not be
+# anchored to the lane it came from. Length equality is what pins the fix.
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_lane_residuals_carry_one_term_per_arc_of_the_path(dataset_id):
+    for step in _traced(dataset_id):
+        assert len(step["lane_residuals"]) == max(len(step["path"]) - 1, 0), (
+            f"iteration {step['iteration']}: {len(step['lane_residuals'])} "
+            f"terms against a {len(step['path'])}-node path; the frontend "
+            f"cannot anchor a min(...) term to the lane it came from"
+        )
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_paths_retain_the_synthetic_terminals_and_null_means_unbounded(dataset_id):
+    """Stripping them made a route appear to begin mid-graph, with the dashed
+    arc it traverses left dark.
+
+    The terminal arcs are built at infinity, which JSON cannot encode, so
+    their residual is `null` -- drawn as no numeral, which is what a
+    super-source arc should carry anyway.
+    """
+    for step in _augmentations(_traced(dataset_id)):
+        assert step["path"][0] == SUPER_SOURCE
+        assert step["path"][-1] == SUPER_SINK
+        assert step["lane_residuals"][0] is None
+        assert step["lane_residuals"][-1] is None
+        assert all(term is not None for term in step["lane_residuals"][1:-1]), (
+            "a real lane shipped an unbounded residual"
+        )
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_every_step_carries_flows_for_every_lane_including_saturated_ones(dataset_id):
+    """Closes the trap where a saturated lane looked like an absent one.
+
+    The residual lists drop an arc the moment it hits zero -- and the
+    saturated lanes are the ones Day 2 most wants drawn. Deriving flow in
+    JavaScript as `cap - residual` would recreate exactly the silent
+    divergence the server-computed `changes` block exists to eliminate.
+    """
+    net = api.get_registry().scenario(dataset_id).network
+    lanes = {(e.src, e.dst): e.cap for e in net.directed_edges() if e.cap > 0}
+    steps = _traced(dataset_id)
+
+    for step in steps:
+        flows = {(f["src"], f["dst"]): f["flow"] for f in step["flows"]}
+        assert lanes.keys() <= flows.keys(), (
+            f"iteration {step['iteration']}: lanes missing from flows"
+        )
+        for lane, cap in lanes.items():
+            assert 0 <= flows[lane] <= cap
+
+    assert all(f["flow"] == 0 for f in steps[0]["flows"]), "step 0 has no flow yet"
+    final = {(f["src"], f["dst"]): f["flow"] for f in steps[-1]["flows"]}
+    assert any(final[lane] == cap for lane, cap in lanes.items()), (
+        "no lane saturates at max flow; this dataset cannot show the trap"
+    )
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_the_trace_is_stateless_and_the_same_request_is_the_same_answer(dataset_id):
+    assert _maxflow(dataset_id, trace="true") == _maxflow(dataset_id, trace="true")
+    # And tracing changes nothing about the result it traces.
+    traced = _maxflow(dataset_id, trace="true")
+    plain = _maxflow(dataset_id)
+    assert {k: traced[k] for k in UNTRACED_FIELDS} == plain
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_the_trace_survives_a_threat_picture(dataset_id):
+    for name in api.get_registry().scenario(dataset_id).threat_pictures:
+        steps = _traced(dataset_id, threat=name)
+        assert steps and steps[0]["iteration"] == 0
+
+
+def test_the_maxflow_payload_is_a_documented_schema_not_a_bare_dict():
+    # Same reasoning as /scenario: the frontend draws from this, so /docs
+    # documents the shape rather than promising an object.
+    openapi = client.app.openapi()
+    schema = openapi["paths"]["/maxflow"]["get"]["responses"]["200"]
+    ref = schema["content"]["application/json"]["schema"]["$ref"]
+    properties = openapi["components"]["schemas"][ref.rsplit("/", 1)[-1]]["properties"]
+    assert UNTRACED_FIELDS <= set(properties)
+    assert "trace" in properties
+
+    params = {p["name"] for p in openapi["paths"]["/maxflow"]["get"]["parameters"]}
+    assert params == {"trace", "threat", "dataset"}
+
+
 # ---- the registry itself ----------------------------------------------------
 def test_registry_scans_the_data_directory_eagerly(tmp_path):
     # Every file is in memory before anything asks for it. Deleting the file

@@ -9,12 +9,17 @@ import os
 
 from clopt.maxflow import EdmondsKarp
 from clopt.scenario import load_scenario
-from clopt.throughput import max_flow_min_cut
+from clopt.throughput import SUPER_SINK, SUPER_SOURCE, max_flow_min_cut
 from clopt.interdiction import budget_interdiction, min_cut_interdiction
 
 DATA = os.path.join(os.path.dirname(__file__), "..", "data")
 TEXTBOOK = os.path.abspath(os.path.join(DATA, "textbook_maxflow.json"))
 THEATER = os.path.abspath(os.path.join(DATA, "theater_sample.json"))
+
+
+def AUGMENTATIONS(res):
+    """The trace without the prepended step 0 -- one entry per augmentation."""
+    return [s for s in res.trace if s.iteration > 0]
 
 
 # ---- core Edmonds-Karp ---------------------------------------------------
@@ -105,9 +110,87 @@ def test_trace_reaches_max_flow():
     totals = [s.total_after for s in res.trace]
     assert totals == sorted(totals)
     assert totals[-1] == 7
-    # Every step's path starts at the real source and ends at the real sink.
-    for s in res.trace:
-        assert s.path[0] == "s" and s.path[-1] == "t"
+    # Every augmentation runs super-source to super-sink; the terminals are
+    # *retained* now (see `test_the_trace_keeps_the_synthetic_terminals`), so
+    # the real source and sink sit one hop inside them.
+    for s in AUGMENTATIONS(res):
+        assert s.path[0] == SUPER_SOURCE and s.path[1] == "s"
+        assert s.path[-2] == "t" and s.path[-1] == SUPER_SINK
+
+
+def test_the_trace_opens_with_a_step_zero_holding_the_initial_residual_graph():
+    """Step 0 exists so the frontend has a "before" to draw iteration 1 against.
+
+    Its uniform render rule is *residuals from step k-1, path annotation from
+    step k*, and iteration 1 otherwise has no k-1. The alternative -- building
+    the initial residual state in JavaScript -- puts residual-graph
+    construction in the browser, which the frontend spec bans.
+    """
+    res = max_flow_min_cut(load_scenario(TEXTBOOK).under(None), trace=True)
+
+    assert len(res.trace) == len(AUGMENTATIONS(res)) + 1
+    zero = res.trace[0]
+    assert zero.iteration == 0
+    assert zero.path == [] and zero.lane_residuals == []
+    assert zero.bottleneck == 0 and zero.total_after == 0
+    # Every lane at full capacity, nothing carrying flow yet.
+    assert ("s", "A", 3.0) in zero.forward_residual
+    assert zero.reverse_residual == []
+    assert all(f == 0 for _, _, f in zero.flows)
+
+
+def test_the_trace_keeps_the_synthetic_terminals():
+    """The data layer stops filtering; the CLI filters at print time.
+
+    Stripping the terminals made a route appear to begin mid-graph with the
+    dashed arc it traverses left dark. They ship, under reserved ids that a
+    scenario file's uppercase-hyphen ids cannot collide with, and their
+    unbounded residual ships as `None`.
+    """
+    res = max_flow_min_cut(load_scenario(TEXTBOOK).under(None), trace=True)
+
+    for step in AUGMENTATIONS(res):
+        assert step.path[0] == SUPER_SOURCE and step.path[-1] == SUPER_SINK
+        # `None` is unbounded: the terminal arcs are built at infinity.
+        assert step.lane_residuals[0] is None
+        assert step.lane_residuals[-1] is None
+        assert all(r is not None for r in step.lane_residuals[1:-1])
+
+
+def test_lane_residuals_carry_one_term_per_arc_of_the_path():
+    """The de-alignment that dropping unbounded terms used to cause.
+
+    A `min(...)` term is only meaningful anchored to the lane it came from,
+    and a filtered list cannot be indexed against the path.
+    """
+    for path in (TEXTBOOK, THEATER):
+        res = max_flow_min_cut(load_scenario(path).under(None), trace=True)
+        for step in AUGMENTATIONS(res):
+            assert len(step.lane_residuals) == len(step.path) - 1
+
+
+def test_every_step_carries_flows_for_every_lane_including_saturated_ones():
+    """A saturated lane was indistinguishable from an absent one.
+
+    The residual lists drop an arc once it hits zero, so Day 2's most
+    interesting lanes -- the saturated ones -- fell out of the payload
+    entirely. `flows` covers every arc explicitly, saturated ones at their
+    capacity and untouched ones at 0.
+    """
+    net = load_scenario(TEXTBOOK).under(None)
+    res = max_flow_min_cut(net, trace=True)
+    lanes = {(e.src, e.dst): e.cap for e in net.directed_edges() if e.cap > 0}
+
+    for step in res.trace:
+        flows = {(u, v): f for u, v, f in step.flows}
+        assert lanes.keys() <= flows.keys()
+        assert all(flows[lane] <= cap for lane, cap in lanes.items())
+
+    final = {(u, v): f for u, v, f in res.trace[-1].flows}
+    # B->t saturates at 5 and A->D at 2; both are cut lanes, and both would
+    # have been missing from the residual lists at this step.
+    assert final[("B", "t")] == 5
+    assert final[("A", "D")] == 2
 
 
 def test_textbook_trace_demonstrates_cancellation():
@@ -123,15 +206,18 @@ def test_textbook_trace_demonstrates_cancellation():
     """
     net = load_scenario(TEXTBOOK).under(None)
     res = max_flow_min_cut(net, trace=True)
+    steps = AUGMENTATIONS(res)
 
     # Three augmentations, pushing 3 / 2 / 2.
-    assert [s.bottleneck for s in res.trace] == [3, 2, 2]
+    assert [s.bottleneck for s in steps] == [3, 2, 2]
 
     # Iteration 3 walks the backward arc B->A, cancelling 2 of the 3 units
     # committed to lane A->B in iteration 1. Partial, not total: A->B ends
     # carrying 1, so the lane visibly loses units rather than blinking out.
-    assert [s.used_reverse for s in res.trace] == [[], [], [("B", "A")]]
-    assert res.trace[2].path == ["s", "C", "B", "A", "D", "t"]
+    assert [s.used_reverse for s in steps] == [[], [], [("B", "A")]]
+    assert steps[2].path == [SUPER_SOURCE, "s", "C", "B", "A", "D", "t", SUPER_SINK]
 
-    # Edmonds-Karp's non-decreasing path length, on screen rather than asserted.
-    assert [len(s.path) - 1 for s in res.trace] == [3, 3, 5]
+    # Edmonds-Karp's non-decreasing path length, on screen rather than
+    # asserted. Two hops longer than the hand-trace on the board: the
+    # super-source and super-sink arcs are now retained.
+    assert [len(s.path) - 1 for s in steps] == [5, 5, 7]
