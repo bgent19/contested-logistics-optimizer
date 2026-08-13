@@ -17,12 +17,13 @@ picture to a fresh copy, so requests never leak state.
 
 from  __future__ import annotations
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from .datasets import DatasetRegistry, build_registry
+from .model import Disruption, DisruptionKind, Edge, Node, NodeKind
 from .routing import cheapest_path, safest_path
 from .scenario import Scenario
 from .solver import solve_allocation, pareto_sweep
@@ -117,6 +118,136 @@ class DatasetSummary(BaseModel):
    description: str
 
 
+# The `/scenario` payload. Unlike the result endpoints, which report the
+# outcome of a solve, this is a *contract* -- the frontend draws from it -- so
+# it is modelled rather than hand-built as a dict, and /docs documents it.
+class NodeOut(BaseModel):
+   id: str
+   # The enum, not a bare `str`: it costs nothing and makes /docs list the
+   # kinds a client can expect instead of promising "any string".
+   kind: NodeKind
+   quantity: float
+   label: str
+   # Authored diagram position in `viewBox` units, `null` when unauthored.
+   # Both or neither -- enforced in `Node.__post_init__`, so a half-authored
+   # file stops the server at startup rather than reaching this model.
+   x: Optional[float] = None
+   y: Optional[float] = None
+
+
+class EdgeOut(BaseModel):
+   """One *stored* edge -- never a reverse arc.
+
+   A bidirectional lane is one entry here and two arcs in the solver. Shipping
+   the expansion would draw the lane twice and would give an interdiction
+   result an entry meaning "this arc" when the model's truth is "both arcs".
+   The frontend derives reverses from `bidirectional`.
+   """
+
+   # The stored-edge index, zero-padded: the file's edge order is the
+   # contract. An index rather than a "src>dst" composite because the model
+   # permits parallel edges, which a composite would not distinguish.
+   id: str
+   src: str
+   dst: str
+   cap: float
+   cost: float
+   risk: float
+   bidirectional: bool
+
+
+class NetworkOut(BaseModel):
+   nodes: List[NodeOut]
+   edges: List[EdgeOut]
+
+
+class DisruptionOut(BaseModel):
+   """A threat picture's declaration, as authored.
+
+   Ships alongside the computed `changes` because `note` is instructor-written
+   narration that nothing in the repo has ever rendered -- on a projector it
+   is the caption.
+   """
+
+   kind: DisruptionKind
+   src: Optional[str] = None
+   dst: Optional[str] = None
+   node: Optional[str] = None
+   factor: float
+   value: float
+   note: str
+
+
+class EdgeChangeOut(BaseModel):
+   """The post-disruption state of one stored edge, keyed by its edge id."""
+
+   id: str
+   cap: float
+   risk: float
+
+
+class ThreatPictureOut(BaseModel):
+   disruptions: List[DisruptionOut]
+   # Server-computed, and deliberately redundant with the declarations above:
+   # the alternative is the frontend reimplementing five disruption kinds in
+   # JavaScript, including remove-node's zero-every-incident-edge semantics
+   # and a risk clamp. A divergence there puts a capacity on the projector
+   # that the API disagrees with, mid-class, with nothing raised anywhere.
+   changes: List[EdgeChangeOut]
+
+
+class ScenarioResponse(BaseModel):
+   name: str
+   description: str
+   # Named `node_count`/`edge_count`, not `nodes`/`edges`: those keys now hold
+   # the arrays inside `network`, and one key cannot mean both an integer and
+   # a list.
+   node_count: int
+   edge_count: int
+   total_supply: float
+   total_demand: float
+   network: NetworkOut
+   threat_pictures: Dict[str, ThreatPictureOut]
+
+
+def _edge_id(index: int) -> str:
+   """The stored-edge index as an id.
+
+   Zero-padded to two digits, which keeps ids the same width -- and so
+   lexically ordered -- on every dataset the unit ships. A file with more
+   than a hundred edges would widen and lose that; nothing draws such a
+   theater, and the id remains unique and contiguous regardless.
+   """
+   return f"e{index:02d}"
+
+
+def _node_out(node: Node) -> NodeOut:
+   return NodeOut(id=node.id, kind=node.kind, quantity=node.quantity,
+                  label=node.label, x=node.x, y=node.y)
+
+
+def _edge_out(index: int, edge: Edge) -> EdgeOut:
+   return EdgeOut(id=_edge_id(index), src=edge.src, dst=edge.dst, cap=edge.cap,
+                  cost=edge.cost, risk=edge.risk, bidirectional=edge.bidirectional)
+
+
+def _disruption_out(disruption: Disruption) -> DisruptionOut:
+   return DisruptionOut(kind=disruption.kind, src=disruption.src,
+                        dst=disruption.dst, node=disruption.node,
+                        factor=disruption.factor, value=disruption.value,
+                        note=disruption.note)
+
+
+def _threat_picture_out(sc: Scenario, name: str) -> ThreatPictureOut:
+   return ThreatPictureOut(
+      disruptions=[_disruption_out(d) for d in sc.threat_pictures[name]],
+      changes=[
+         EdgeChangeOut(id=_edge_id(c.index), cap=c.cap, risk=c.risk)
+         for c in sc.edge_changes(name)
+      ],
+   )
+
+
 # ---- endpoints --------------------------------------------------------------
 @app.get("/health")
 def health() -> dict:
@@ -129,19 +260,34 @@ def datasets() -> List[DatasetSummary]:
    return [DatasetSummary(**row) for row in get_registry().summaries()]
 
 
-@app.get("/scenario")
-def scenario(dataset: Optional[str] = DATASET_QUERY) -> dict:
+@app.get("/scenario", response_model=ScenarioResponse)
+def scenario(dataset: Optional[str] = DATASET_QUERY) -> ScenarioResponse:
+   """The whole drawable payload: the network, and every threat picture's effects.
+
+   There is no `threat` parameter -- the pristine network is returned always,
+   and the effects of each picture ship inside `threat_pictures`. One request
+   gives a frontend everything it needs to draw the theater and to switch
+   between threat pictures without asking again.
+   """
    sc = _scenario_for(dataset)
    net = sc.network
-   return {
-      "name": sc.name,
-      "description": sc.description,
-      "nodes": len(net.nodes),
-      "edges": len(net.edges),
-      "total_supply": net.total_supply(),
-      "total_demand": net.total_demand(),
-      "threat_pictures": sorted(sc.threat_pictures),
-      }
+   return ScenarioResponse(
+      name=sc.name,
+      description=sc.description,
+      node_count=len(net.nodes),
+      edge_count=len(net.edges),
+      total_supply=net.total_supply(),
+      total_demand=net.total_demand(),
+      network=NetworkOut(
+         nodes=[_node_out(n) for n in net.nodes.values()],
+         # `net.edges`, not `net.directed_edges()`: the stored edges are the
+         # contract, and the expansion is the solver's business.
+         edges=[_edge_out(i, e) for i, e in enumerate(net.edges)],
+      ),
+      threat_pictures={
+         name: _threat_picture_out(sc, name) for name in sc.threat_pictures
+      },
+   )
 
 
 @app.get("/allocate", response_model=AllocationResponse)

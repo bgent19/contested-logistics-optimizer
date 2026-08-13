@@ -265,7 +265,7 @@ make api      # uvicorn clopt.api:app  ->  http://localhost:8000/docs
 | endpoint | purpose |
 |----------|---------|
 | `GET /datasets` | the dataset menu: `id`, `name`, `description` |
-| `GET /scenario` | theater summary and available threat pictures |
+| `GET /scenario` | the whole drawable theater: network, coordinates, threat pictures |
 | `GET /allocate?risk_aversion=&threat=` | full allocation plan with per-leg flow |
 | `GET /route?from=&to=&safest=&threat=` | single-convoy path |
 | `GET /sweep?lambdas=&threat=` | cost/risk frontier rows |
@@ -285,6 +285,55 @@ load stops the server immediately and the error names the file, rather than
 surfacing as a 500 halfway through a class.
 
 Interactive Swagger docs are served at `/docs`.
+
+### The `/scenario` payload
+
+`/scenario` is the one endpoint a frontend draws from, so it returns the whole
+picture in a single request: the summary counts, the full network with authored
+coordinates, and every threat picture with its effects already computed.
+
+```jsonc
+{
+  "name": "...", "description": "...",
+  "node_count": 9, "edge_count": 12,
+  "total_supply": 180.0, "total_demand": 160.0,
+  "network": {
+    "nodes": [ { "id": "HUB-ALPHA", "kind": "supply", "quantity": 120.0,
+                 "label": "...", "x": 110.0, "y": 250.0 } ],
+    "edges": [ { "id": "e00", "src": "HUB-ALPHA", "dst": "LANE-J1",
+                 "cap": 120.0, "cost": 4.0, "risk": 0.05, "bidirectional": false } ]
+  },
+  "threat_pictures": {
+    "strait_mined": {
+      "disruptions": [ { "kind": "remove_edge", "src": "...", "dst": "...", "note": "..." } ],
+      "changes":     [ { "id": "e01", "cap": 0.0, "risk": 0.45 } ]
+    }
+  }
+}
+```
+
+Four things are worth knowing before writing a client against it:
+
+- **There is no `threat` parameter.** The pristine network is returned always,
+  and each picture's effects ship inside it, so switching threat pictures on
+  screen needs no second request.
+- **Edges are the *stored* edges — never reverse arcs.** A `bidirectional`
+  lane is one entry here and two arcs inside the solver; deriving the reverse
+  is the client's job. Shipping the expansion would draw every such lane twice.
+- **The edge `id` is the stored-edge index**, zero-padded (`e00`…), so a
+  dataset file's edge order is part of the contract. It is an index rather
+  than a `"src>dst"` composite because the model permits parallel edges.
+- **`changes` is server-computed and deliberately redundant** with the
+  declarations beside it: it is each edge's *post*-disruption `cap` and `risk`,
+  so a client overwrites rather than reimplementing five disruption kinds
+  (including `remove_node`'s zero-every-incident-edge semantics and a risk
+  clamp) in JavaScript. The `disruptions` list still ships because its `note`
+  is instructor-written narration — on a projector, a caption.
+
+One authoring trap, known and not fixed: disruption declarations match on the
+**stored direction only**, so a threat picture written with `src`/`dst`
+reversed matches nothing and fails silently. Authoring a new theater means
+checking that each declaration actually moves an edge.
 
 ---
 
