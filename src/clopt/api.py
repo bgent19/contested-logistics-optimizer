@@ -26,7 +26,7 @@ picture to a fresh copy, so requests never leak state.
 from  __future__ import annotations
 
 import math
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -39,7 +39,7 @@ from .routing import (
 )
 from .scenario import Scenario
 from .solver import AllocationResult, solve_allocation, pareto_sweep
-from .throughput import max_flow_min_cut
+from .throughput import TraceStep, max_flow_min_cut
 from .interdiction import budget_interdiction, min_cut_interdiction
 
 app = FastAPI(
@@ -219,6 +219,90 @@ class NaivePlanRow(BaseModel):
    sources: List[SourceLoadOut]    # every supply node, idle ones included
    notional_cost: float
    unserved: float
+
+
+class CutLaneOut(BaseModel):
+   """One lane of the witness cut -- the Day 3 certificate, lane by lane."""
+
+   src: str
+   dst: str
+   capacity: float
+
+
+class ArcOut(BaseModel):
+   """A directed arc of the residual graph, by endpoints.
+
+   Endpoints, not an edge id: a reverse arc has no id by construction, so there
+   is no identifier the two directions could share. The frontend's directed-pair
+   -> `{edge_id, direction}` lookup has to exist for that reason regardless, and
+   threading ids through the arc generator would serve one consumer at the cost
+   of touching three working call sites.
+   """
+
+   src: str
+   dst: str
+
+
+class ResidualArcOut(ArcOut):
+   """An arc with the spare capacity left on it.
+
+   `null` residual means *unbounded*, not unknown: the super-source and
+   super-sink arcs are built at infinity so that cuts land on lanes, and JSON
+   cannot encode that. Draw it as no numeral, which is correct anyway -- a
+   terminal arc should not carry a capacity label.
+   """
+
+   residual: Optional[float]
+
+
+class ArcFlowOut(ArcOut):
+   """What one arc carries at this step, stated for every arc."""
+
+   flow: float
+
+
+class TraceStepOut(BaseModel):
+   """One Edmonds-Karp iteration, complete enough to draw without the others.
+
+   A snapshot, never a delta -- which is what makes stepping backward an index
+   decrement instead of a re-solve. Iteration 0 is the graph before the first
+   push: empty path, zero bottleneck, and the initial residuals. The frontend's
+   render rule is uniform (residuals from step k-1, path annotation from step
+   k), and iteration 1 has no "before" without it.
+   """
+
+   iteration: int
+   # Retains the synthetic terminals it traverses. Stripped, a route appears to
+   # begin mid-graph with the dashed arc it crossed left dark.
+   path: List[str]
+   # The `min(...)` terms, in path order and one per hop: entry i is the arc
+   # from `path[i]` to `path[i+1]`, so `len(lane_residuals) == len(path) - 1`
+   # on every augmentation. Unbounded terms are `null` and stay in place --
+   # dropping them de-aligns the list and a term can no longer be anchored to
+   # the lane it came from.
+   lane_residuals: List[Optional[float]]
+   bottleneck: float
+   total_after: float
+   forward_residual: List[ResidualArcOut]
+   reverse_residual: List[ResidualArcOut]
+   used_reverse: List[ArcOut]
+   # Every arc, carrying zero where it carries zero. Without this a saturated
+   # lane -- which leaves the residual lists entirely -- is indistinguishable
+   # from one that does not exist, and saturated lanes are exactly what Day 2
+   # wants drawn. Server-computed rather than `cap - residual` in JavaScript,
+   # for the same reason the `changes` block is server-computed.
+   flows: List[ArcFlowOut]
+
+
+class MaxFlowResponse(BaseModel):
+   """Max throughput, its witness cut, and optionally the whole trace."""
+
+   max_throughput: float
+   cut_capacity: float
+   source_side: List[str]
+   cut_lanes: List[CutLaneOut]
+   # Empty unless `trace=true`, never absent: a frontend reads its length.
+   trace: List[TraceStepOut] = []
 
 
 class DatasetSummary(BaseModel):
@@ -523,19 +607,64 @@ def naive(
    ]
 
 
-@app.get("/maxflow")
+def _unbounded_as_null(residual: Optional[float]) -> Optional[float]:
+   """A residual capacity, or `null` where the arc is unbounded.
+
+   The core already says `None` for the terminal arcs; this restates the
+   conversion where the wire contract lives, so an infinity arriving by some
+   other route still cannot reach a browser as `Infinity`. See `_finite_or_null`.
+   """
+   return None if residual is None else _finite_or_null(residual)
+
+
+def _residual_out(arc: Tuple[str, str, Optional[float]]) -> ResidualArcOut:
+   src, dst, residual = arc
+   return ResidualArcOut(src=src, dst=dst, residual=_unbounded_as_null(residual))
+
+
+def _trace_step_out(step: TraceStep) -> TraceStepOut:
+   """One augmentation, in wire form."""
+   return TraceStepOut(
+      iteration=step.iteration,
+      path=step.path,
+      lane_residuals=[_unbounded_as_null(c) for c in step.lane_residuals],
+      bottleneck=step.bottleneck,
+      total_after=step.total_after,
+      forward_residual=[_residual_out(a) for a in step.forward_residual],
+      reverse_residual=[_residual_out(a) for a in step.reverse_residual],
+      used_reverse=[ArcOut(src=u, dst=v) for u, v in step.used_reverse],
+      flows=[ArcFlowOut(src=u, dst=v, flow=f) for u, v, f in step.flows],
+   )
+
+
+@app.get("/maxflow", response_model=MaxFlowResponse)
 def maxflow(
+   trace: bool = Query(False, description="Ship the whole Edmonds-Karp trace."),
    threat: Optional[str] = Query(None),
    dataset: Optional[str] = DATASET_QUERY,
-) -> dict:
-   res = max_flow_min_cut(_net_for(dataset, threat))
-   return {
-      "max_throughput": res.value,
-      "cut_capacity": res.cut_capacity,
-      "source_side": res.source_side,
-      "cut_lanes": [{"src": c.src, "dst": c.dst, "capacity": c.capacity}
-                     for c in res.cut_lanes],
-   }
+) -> MaxFlowResponse:
+   """Max throughput and its witness cut; with `trace`, every augmentation.
+
+   The whole trace ships as one array, statelessly. Day 2 steps through the
+   augmentations with the arrow keys, so backward stepping has to be an index
+   decrement -- and it can be, because each entry is a complete snapshot rather
+   than a delta. A server-side cursor would buy nothing and would break this
+   API's own promise that a request leaks no state.
+
+   One array entry per augmentation, not per drawn frame: the instructor says
+   "iteration 3", and the array then matches the CLI output and the hand-trace
+   on the board. A frontend that wants two beats per iteration sub-steps them
+   itself.
+   """
+   res = max_flow_min_cut(_net_for(dataset, threat), trace=trace)
+   return MaxFlowResponse(
+      max_throughput=res.value,
+      cut_capacity=res.cut_capacity,
+      source_side=res.source_side,
+      cut_lanes=[CutLaneOut(src=c.src, dst=c.dst, capacity=c.capacity)
+                 for c in res.cut_lanes],
+      trace=[_trace_step_out(step) for step in res.trace],
+   )
 
 
 @app.get("/interdict")

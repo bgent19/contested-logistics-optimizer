@@ -14,13 +14,22 @@ which is exactly the quantity interdiction tries to drive down.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from .maxflow import EdmondsKarp
 from .model import Network, NodeKind
 
 _BIG = float("inf")
+
+# The super-source and super-sink, named rather than anonymous. A trace that
+# strips them shows a route beginning mid-graph across an arc nothing accounts
+# for, so they are labelled and shipped. Scenario files use uppercase-hyphen
+# ids, so the dunder prefix cannot collide with a real node.
+SOURCE_ID = "__source__"
+SINK_ID = "__sink__"
+SYNTHETIC_IDS = frozenset({SOURCE_ID, SINK_ID})
 
 
 @dataclass
@@ -32,14 +41,26 @@ class CutLane:
 
 @dataclass
 class TraceStep:
-   """One augmentation, in node labels, for hand-trace display."""
-   iteration: int
+   """One augmentation, in node labels, for hand-trace display.
+
+   Complete, in the sense the solver's `AugmentationStep` is complete: the
+   synthetic terminals are named rather than stripped, and an unbounded residual
+   is `None` rather than dropped. `None` means *unbounded*, not unknown -- the
+   terminal arcs are built at infinity so that cuts land on lanes, and both JSON
+   and a `min(...)` line want something other than `inf` for that.
+
+   Callers that want the tidier classroom form narrow this at display time; see
+   `cli.cmd_maxflow`. Filtering here is what de-aligned `lane_residuals` from
+   `path` and made a term impossible to anchor to its lane.
+   """
+   iteration: int                               # 0 is the pre-augmentation snapshot
    path: List[str]
-   lane_residuals: List[float]                  # the min(...) terms, in path order
+   lane_residuals: List[Optional[float]]        # the min(...) terms, one per hop of `path`
    bottleneck: float
    total_after: float
-   forward_residual: List[Tuple[str, str, float]]   # lanes with spare capacity
-   reverse_residual: List[Tuple[str, str, float]]   # cancellation arcs (the residual trick)
+   forward_residual: List[Tuple[str, str, Optional[float]]]   # lanes with spare capacity
+   reverse_residual: List[Tuple[str, str, Optional[float]]]   # cancellation arcs (the residual trick)
+   flows: List[Tuple[str, str, float]] = field(default_factory=list)  # every arc, zeros included
    used_reverse: List[Tuple[str, str]] = field(default_factory=list)  # reverse arcs this step traversed
 
 
@@ -76,6 +97,16 @@ def _build(net: Network) -> Tuple[EdmondsKarp, Dict[str, int], int, int, List[Tu
    return ek, index, S, T, lane_handles
 
 
+def _bounded(residual: float) -> Optional[float]:
+   """A residual capacity, or `None` where the arc is unbounded."""
+   return residual if math.isfinite(residual) else None
+
+
+def _by_endpoints(arc: Tuple[str, str, float]) -> Tuple[str, str]:
+   """Sort arcs by their endpoints alone -- the third field may be `None`."""
+   return arc[0], arc[1]
+
+
 def max_flow_min_cut(net: Network, trace: bool = False) -> MaxFlowResult:
    ek, index, S, T, lane_handles = _build(net)
    value = ek.max_flow(S, T, trace=trace)
@@ -94,40 +125,32 @@ def max_flow_min_cut(net: Network, trace: bool = False) -> MaxFlowResult:
 
    steps: List[TraceStep] = []
    if trace:
-      def label(i: int):
-         return inv.get(i)  # None for the synthetic super-source/sink
+      labels = dict(inv)
+      labels[S] = SOURCE_ID
+      labels[T] = SINK_ID
 
-      for k, raw in enumerate(ek.trace, start=1):
-         # Strip the synthetic super-source (front) and super-sink (back).
-         path_labels = [label(n) for n in raw.path]
-         while path_labels and path_labels[0] is None:
-               path_labels.pop(0)
-         while path_labels and path_labels[-1] is None:
-               path_labels.pop()
+      def label(i: int) -> str:
+         return labels[i]
 
-         fwd: List[Tuple[str, str, float]] = []
-         rev: List[Tuple[str, str, float]] = []
+      # Index 0 is the solver's step 0, so the enumeration index *is* the
+      # iteration number the instructor says out loud.
+      for k, raw in enumerate(ek.trace):
+         fwd: List[Tuple[str, str, Optional[float]]] = []
+         rev: List[Tuple[str, str, Optional[float]]] = []
          for u, v, cap, is_back in raw.residual_edges:
-               lu, lv = label(u), label(v)
-               if lu is None or lv is None or cap == _BIG:
-                  continue  # skip terminal / super-node arcs
-               (rev if is_back else fwd).append((lu, lv, cap))
-
-         used_rev = []
-         for u, v in raw.reverse_used:
-               lu, lv = label(u), label(v)
-               if lu is not None and lv is not None:
-                  used_rev.append((lu, lv))
+               (rev if is_back else fwd).append((label(u), label(v), _bounded(cap)))
 
          steps.append(TraceStep(
                iteration=k,
-               path=path_labels,
-               lane_residuals=raw.lane_residuals,
+               path=[label(n) for n in raw.path],
+               lane_residuals=[_bounded(c) for c in raw.lane_residuals],
                bottleneck=raw.bottleneck,
                total_after=raw.total_after,
-               forward_residual=sorted(fwd),
-               reverse_residual=sorted(rev),
-               used_reverse=used_rev,
+               forward_residual=sorted(fwd, key=_by_endpoints),
+               reverse_residual=sorted(rev, key=_by_endpoints),
+               flows=sorted(((label(u), label(v), f) for u, v, f in raw.flows),
+                            key=_by_endpoints),
+               used_reverse=[(label(u), label(v)) for u, v in raw.reverse_used],
          ))
 
    return MaxFlowResult(

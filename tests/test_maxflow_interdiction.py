@@ -9,7 +9,7 @@ import os
 
 from clopt.maxflow import EdmondsKarp
 from clopt.scenario import load_scenario
-from clopt.throughput import max_flow_min_cut
+from clopt.throughput import SINK_ID, SOURCE_ID, SYNTHETIC_IDS, max_flow_min_cut
 from clopt.interdiction import budget_interdiction, min_cut_interdiction
 
 DATA = os.path.join(os.path.dirname(__file__), "..", "data")
@@ -96,18 +96,44 @@ def test_subset_count_reflects_combinatorics():
     assert res.subsets_considered == 78
 
 
+def _augmentations(res):
+    """The real iterations of a trace, without the prepended step 0.
+
+    `trace[0]` is the graph before any push -- empty path, zero bottleneck --
+    which exists so a drawing consumer has a "before" for iteration 1. It is not
+    an augmentation, so the algorithmic assertions below step over it.
+    """
+    assert res.trace[0].iteration == 0
+    assert res.trace[0].path == [] and res.trace[0].bottleneck == 0
+    return res.trace[1:]
+
+
+def _lanes(path):
+    """A traced path with the synthetic terminals dropped, as a student reads it."""
+    return [n for n in path if n not in SYNTHETIC_IDS]
+
+
 def test_trace_reaches_max_flow():
     net = load_scenario(TEXTBOOK).under(None)
     res = max_flow_min_cut(net, trace=True)
-    assert res.trace, "trace should have at least one augmentation"
+    steps = _augmentations(res)
+    assert steps, "trace should have at least one augmentation"
     # Bottlenecks sum to the max-flow value, totals are monotone, last equals value.
-    assert sum(s.bottleneck for s in res.trace) == res.value == 7
-    totals = [s.total_after for s in res.trace]
+    assert sum(s.bottleneck for s in steps) == res.value == 7
+    totals = [s.total_after for s in steps]
     assert totals == sorted(totals)
     assert totals[-1] == 7
-    # Every step's path starts at the real source and ends at the real sink.
-    for s in res.trace:
-        assert s.path[0] == "s" and s.path[-1] == "t"
+    # Every step's path runs super-source to super-sink, across the real source
+    # and sink. The terminals are retained rather than stripped: a path that
+    # begins at "s" hides the arc the flow actually entered through.
+    for s in steps:
+        assert s.path[0] == SOURCE_ID and s.path[-1] == SINK_ID
+        assert _lanes(s.path)[0] == "s" and _lanes(s.path)[-1] == "t"
+        # One min(...) term per hop, terminals included -- the alignment the
+        # drawing consumer anchors each term to its lane by.
+        assert len(s.lane_residuals) == len(s.path) - 1
+        assert s.lane_residuals[0] is None and s.lane_residuals[-1] is None
+        assert all(c is not None for c in s.lane_residuals[1:-1])
 
 
 def test_textbook_trace_demonstrates_cancellation():
@@ -123,15 +149,21 @@ def test_textbook_trace_demonstrates_cancellation():
     """
     net = load_scenario(TEXTBOOK).under(None)
     res = max_flow_min_cut(net, trace=True)
+    steps = _augmentations(res)
 
     # Three augmentations, pushing 3 / 2 / 2.
-    assert [s.bottleneck for s in res.trace] == [3, 2, 2]
+    assert [s.bottleneck for s in steps] == [3, 2, 2]
 
     # Iteration 3 walks the backward arc B->A, cancelling 2 of the 3 units
     # committed to lane A->B in iteration 1. Partial, not total: A->B ends
     # carrying 1, so the lane visibly loses units rather than blinking out.
-    assert [s.used_reverse for s in res.trace] == [[], [], [("B", "A")]]
-    assert res.trace[2].path == ["s", "C", "B", "A", "D", "t"]
+    assert [s.used_reverse for s in steps] == [[], [], [("B", "A")]]
+    assert _lanes(steps[2].path) == ["s", "C", "B", "A", "D", "t"]
+
+    # A->B keeps the 1 unit it was not stripped of, and says so explicitly
+    # rather than by absence from the residual list.
+    flows = {(u, v): f for u, v, f in steps[2].flows}
+    assert flows[("A", "B")] == 1
 
     # Edmonds-Karp's non-decreasing path length, on screen rather than asserted.
-    assert [len(s.path) - 1 for s in res.trace] == [3, 3, 5]
+    assert [len(_lanes(s.path)) - 1 for s in steps] == [3, 3, 5]

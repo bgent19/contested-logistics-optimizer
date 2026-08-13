@@ -681,6 +681,208 @@ def test_naive_is_documented_at_docs_with_the_same_lambda_parameter_as_sweep():
     )
 
 
+# ---- the whole Edmonds-Karp trace, statelessly ------------------------------
+# Day 2 steps through augmentations with the arrow keys, so the entire trace
+# ships in one call and stepping backward is an index decrement. Every step is a
+# complete snapshot rather than a delta against the one before it -- that is
+# what lets the frontend render step k without having replayed 1..k-1, and it is
+# the property most of this section is really checking.
+TRACE_STEP_FIELDS = {
+    "iteration", "path", "lane_residuals", "bottleneck", "total_after",
+    "forward_residual", "reverse_residual", "used_reverse", "flows",
+}
+SOURCE, SINK = "__source__", "__sink__"
+
+
+def _maxflow(dataset_id, **params):
+    response = client.get("/maxflow", params={"dataset": dataset_id, **params})
+    assert response.status_code == 200, response.text
+    # Not `.json()`: an unbounded terminal arc must reach the wire as `null`,
+    # and Python's decoder would quietly accept the `Infinity` that costs a
+    # browser the whole response. See `_reject_json_constant`.
+    return json.loads(response.text, parse_constant=_reject_json_constant)
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_untraced_maxflow_keeps_every_field_it_already_served(dataset_id):
+    plain = _maxflow(dataset_id)
+    traced = _maxflow(dataset_id, trace=True)
+    assert set(plain) == {
+        "max_throughput", "cut_capacity", "source_side", "cut_lanes", "trace"
+    }
+    assert plain["trace"] == []
+    # The cut is the Day 3 certificate and does not move because Day 2 asked to
+    # watch the augmentations that produced it.
+    for field in ("max_throughput", "cut_capacity", "source_side", "cut_lanes"):
+        assert plain[field] == traced[field]
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_the_trace_is_one_step_per_augmentation_plus_a_prepended_step_zero(dataset_id):
+    steps = _maxflow(dataset_id, trace=True)["trace"]
+    assert [step["iteration"] for step in steps] == list(range(len(steps)))
+
+    # Step 0 is the "before" the first iteration has nothing else to draw
+    # against: the initial residual graph, no path, no push.
+    assert steps[0]["path"] == []
+    assert steps[0]["bottleneck"] == 0
+    assert steps[0]["total_after"] == 0
+    assert steps[0]["lane_residuals"] == []
+    assert steps[0]["used_reverse"] == []
+
+    # Every other entry is a real augmentation -- one array entry per
+    # iteration, so "iteration 3" means the same thing on the screen, in the
+    # CLI, and on the board.
+    augmentations = steps[1:]
+    assert augmentations, "a shipped theater that never augments would be a bug"
+    for step in augmentations:
+        assert step["bottleneck"] > 0
+        assert len(step["path"]) >= 2
+    running = 0.0
+    for step in augmentations:
+        running += step["bottleneck"]
+        assert step["total_after"] == pytest.approx(running)
+    assert running == pytest.approx(_maxflow(dataset_id)["max_throughput"])
+
+
+def test_the_textbook_trace_is_the_three_hand_checked_augmentations():
+    # The dataset that exists to match the handout: three augmentations, the
+    # third of which cancels flow across a reverse arc. If BFS ever picks a
+    # different-but-valid run this fails loudly, which is the point -- the
+    # lecture is written against this exact trace.
+    steps = _maxflow("textbook_maxflow", trace=True)["trace"]
+    assert len(steps) == 4
+    assert [step["bottleneck"] for step in steps] == [0, 3, 2, 2]
+    assert [step["total_after"] for step in steps] == [0, 3, 5, 7]
+    assert steps[3]["used_reverse"] == [{"src": "B", "dst": "A"}]
+    assert steps[1]["used_reverse"] == steps[2]["used_reverse"] == []
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_every_step_carries_the_full_field_set(dataset_id):
+    for step in _maxflow(dataset_id, trace=True)["trace"]:
+        assert set(step) == TRACE_STEP_FIELDS
+        for arc in step["forward_residual"] + step["reverse_residual"]:
+            assert set(arc) == {"src", "dst", "residual"}
+        for arc in step["flows"]:
+            assert set(arc) == {"src", "dst", "flow"}
+        for arc in step["used_reverse"]:
+            assert set(arc) == {"src", "dst"}
+
+
+# The single most valuable assertion in this file. The data layer used to drop
+# unbounded terms from the residual list purely to tidy CLI output, which
+# de-aligned it from the path: a `min(...)` term could no longer be anchored to
+# the lane it came from, and the frontend cannot label a lane it cannot
+# identify. Nothing else here would notice that filter coming back.
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_lane_residuals_line_up_with_the_path_one_term_per_hop(dataset_id):
+    for step in _maxflow(dataset_id, trace=True)["trace"]:
+        assert len(step["lane_residuals"]) == max(len(step["path"]) - 1, 0)
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_paths_retain_the_synthetic_terminals_they_actually_traverse(dataset_id):
+    steps = _maxflow(dataset_id, trace=True)["trace"]
+    # Stripping these made a route appear to begin mid-graph, with the dashed
+    # arc it traverses left dark.
+    for step in steps[1:]:
+        assert step["path"][0] == SOURCE
+        assert step["path"][-1] == SINK
+        assert SOURCE not in step["path"][1:]
+        assert SINK not in step["path"][:-1]
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_an_unbounded_residual_is_null_and_only_the_terminal_arcs_are(dataset_id):
+    # `null` means unbounded: the terminal arcs are built at infinity so the cut
+    # lands on lanes, and JSON cannot encode that. Drawn as no numeral, which is
+    # right anyway -- a super-source arc carries no capacity label.
+    net = api.get_registry().scenario(dataset_id).network
+    for step in _maxflow(dataset_id, trace=True)["trace"][1:]:
+        hops = list(zip(step["path"], step["path"][1:]))
+        for (src, dst), residual in zip(hops, step["lane_residuals"]):
+            terminal = SOURCE in (src, dst) or SINK in (src, dst)
+            assert (residual is None) == terminal
+            if not terminal:
+                assert residual > 0
+        for arc in step["forward_residual"] + step["reverse_residual"]:
+            if arc["residual"] is None:
+                assert SOURCE in (arc["src"], arc["dst"]) or SINK in (arc["src"], arc["dst"])
+    assert SOURCE not in net.nodes and SINK not in net.nodes
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_flows_cover_every_arc_including_the_saturated_and_the_idle(dataset_id):
+    # The trap this closes: a saturated lane leaves the residual list entirely,
+    # so it was indistinguishable from a lane that does not exist -- and
+    # saturated lanes are the ones Day 2 most wants drawn. Deriving flow in the
+    # browser as `cap - residual` would recreate the silent divergence the
+    # server-computed answer exists to eliminate.
+    net = api.get_registry().scenario(dataset_id).network
+    lanes = {(e.src, e.dst) for e in net.directed_edges() if e.cap > 0}
+    steps = _maxflow(dataset_id, trace=True)["trace"]
+
+    for step in steps:
+        arcs = {(arc["src"], arc["dst"]): arc["flow"] for arc in step["flows"]}
+        assert len(arcs) == len(step["flows"]), "one entry per arc, no duplicates"
+        assert lanes <= set(arcs)
+        for flow in arcs.values():
+            assert flow >= 0
+
+    assert all(flow == 0 for flow in
+               {(a["src"], a["dst"]): a["flow"] for a in steps[0]["flows"]}.values())
+
+    # A lane at zero residual is carrying its capacity, not missing.
+    final = steps[-1]
+    residuals = {(a["src"], a["dst"]): a["residual"] for a in final["forward_residual"]}
+    caps = {(e.src, e.dst): e.cap for e in net.directed_edges() if e.cap > 0}
+    flows = {(a["src"], a["dst"]): a["flow"] for a in final["flows"]}
+    saturated = [lane for lane in lanes if lane not in residuals]
+    assert saturated, "the shipped theaters all saturate something at maximum flow"
+    for lane in saturated:
+        assert flows[lane] == pytest.approx(caps[lane])
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_each_step_is_a_complete_snapshot_not_a_delta(dataset_id):
+    # What makes backward stepping an index decrement: step k is renderable
+    # without having replayed the steps before it, so every step lists the same
+    # arcs and the frontend never accumulates state.
+    steps = _maxflow(dataset_id, trace=True)["trace"]
+    signature = {(arc["src"], arc["dst"]) for arc in steps[0]["flows"]}
+    for step in steps:
+        assert {(arc["src"], arc["dst"]) for arc in step["flows"]} == signature
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_the_trace_ships_whole_and_leaks_no_server_state(dataset_id):
+    # No cursor, no session: the same request twice is the same answer, and
+    # asking for the trace does not change the untraced answer that follows.
+    first = _maxflow(dataset_id, trace=True)
+    assert first == _maxflow(dataset_id, trace=True)
+    assert _maxflow(dataset_id) == _maxflow(dataset_id)
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_the_trace_follows_the_threat_picture_like_the_rest_of_maxflow(dataset_id):
+    names = list(api.get_registry().scenario(dataset_id).threat_pictures)
+    for name in names:
+        under = _maxflow(dataset_id, trace=True, threat=name)
+        assert under["max_throughput"] == pytest.approx(
+            sum(step["bottleneck"] for step in under["trace"])
+        )
+
+
+def test_maxflow_is_a_documented_schema_with_a_documented_trace_flag():
+    spec = client.app.openapi()
+    params = {p["name"]: p for p in spec["paths"]["/maxflow"]["get"]["parameters"]}
+    assert set(params) == {"trace", "threat", "dataset"}
+    assert params["trace"]["schema"]["default"] is False
+    body = spec["paths"]["/maxflow"]["get"]["responses"]["200"]["content"]
+    assert "$ref" in body["application/json"]["schema"]
+
+
 # ---- the registry itself ----------------------------------------------------
 def test_registry_scans_the_data_directory_eagerly(tmp_path):
     # Every file is in memory before anything asks for it. Deleting the file

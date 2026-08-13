@@ -1,0 +1,52 @@
+Edmonds-Karp, iteration by iteration
+(BFS picks a fewest-hop augmenting path each round; ties may pick a
+ different-but-valid path than a handout, so this is *a* correct run.)
+
+Iteration 1: HUB-ALPHA -> LANE-J1 -> FOB-KILO
+  bottleneck = min(120, 60) = 60
+  cumulative flow = 60
+  residual (spare capacity): AIRHEAD-7->FOB-LIMA 25  AIRHEAD-7->FOB-MIKE 25  HUB-ALPHA->LANE-J1 60  HUB-ALPHA->STRAIT-3 80  HUB-BRAVO->LANE-J2 60  LANE-J1->AIRHEAD-7 40  LANE-J1->LANE-J2 90  LANE-J2->FOB-KILO 50  LANE-J2->FOB-LIMA 50  LANE-J2->FOB-MIKE 30  LANE-J2->LANE-J1 90  STRAIT-3->FOB-KILO 80
+  residual (reverse/cancel): FOB-KILO->LANE-J1 60  LANE-J1->HUB-ALPHA 60
+
+Iteration 2: HUB-ALPHA -> STRAIT-3 -> FOB-KILO
+  bottleneck = min(80, 80) = 80
+  cumulative flow = 140
+  residual (spare capacity): AIRHEAD-7->FOB-LIMA 25  AIRHEAD-7->FOB-MIKE 25  HUB-ALPHA->LANE-J1 60  HUB-BRAVO->LANE-J2 60  LANE-J1->AIRHEAD-7 40  LANE-J1->LANE-J2 90  LANE-J2->FOB-KILO 50  LANE-J2->FOB-LIMA 50  LANE-J2->FOB-MIKE 30  LANE-J2->LANE-J1 90
+  residual (reverse/cancel): FOB-KILO->LANE-J1 60  FOB-KILO->STRAIT-3 80  LANE-J1->HUB-ALPHA 60  STRAIT-3->HUB-ALPHA 80
+
+Iteration 3: HUB-BRAVO -> LANE-J2 -> FOB-KILO
+  bottleneck = min(60, 50) = 50
+  cumulative flow = 190
+  residual (spare capacity): AIRHEAD-7->FOB-LIMA 25  AIRHEAD-7->FOB-MIKE 25  HUB-ALPHA->LANE-J1 60  HUB-BRAVO->LANE-J2 10  LANE-J1->AIRHEAD-7 40  LANE-J1->LANE-J2 90  LANE-J2->FOB-LIMA 50  LANE-J2->FOB-MIKE 30  LANE-J2->LANE-J1 90
+  residual (reverse/cancel): FOB-KILO->LANE-J1 60  FOB-KILO->LANE-J2 50  FOB-KILO->STRAIT-3 80  LANE-J1->HUB-ALPHA 60  LANE-J2->HUB-BRAVO 50  STRAIT-3->HUB-ALPHA 80
+
+Iteration 4: HUB-BRAVO -> LANE-J2 -> FOB-LIMA
+  bottleneck = min(10, 50) = 10
+  cumulative flow = 200
+  residual (spare capacity): AIRHEAD-7->FOB-LIMA 25  AIRHEAD-7->FOB-MIKE 25  HUB-ALPHA->LANE-J1 60  LANE-J1->AIRHEAD-7 40  LANE-J1->LANE-J2 90  LANE-J2->FOB-LIMA 40  LANE-J2->FOB-MIKE 30  LANE-J2->LANE-J1 90
+  residual (reverse/cancel): FOB-KILO->LANE-J1 60  FOB-KILO->LANE-J2 50  FOB-KILO->STRAIT-3 80  FOB-LIMA->LANE-J2 10  LANE-J1->HUB-ALPHA 60  LANE-J2->HUB-BRAVO 60  STRAIT-3->HUB-ALPHA 80
+
+Iteration 5: HUB-ALPHA -> LANE-J1 -> LANE-J2 -> FOB-LIMA
+  bottleneck = min(60, 90, 40) = 40
+  cumulative flow = 240
+  residual (spare capacity): AIRHEAD-7->FOB-LIMA 25  AIRHEAD-7->FOB-MIKE 25  HUB-ALPHA->LANE-J1 20  LANE-J1->AIRHEAD-7 40  LANE-J1->LANE-J2 50  LANE-J2->FOB-MIKE 30  LANE-J2->LANE-J1 90
+  residual (reverse/cancel): FOB-KILO->LANE-J1 60  FOB-KILO->LANE-J2 50  FOB-KILO->STRAIT-3 80  FOB-LIMA->LANE-J2 50  LANE-J1->HUB-ALPHA 100  LANE-J2->HUB-BRAVO 60  LANE-J2->LANE-J1 40  STRAIT-3->HUB-ALPHA 80
+
+Iteration 6: HUB-ALPHA -> LANE-J1 -> LANE-J2 -> FOB-MIKE
+  bottleneck = min(20, 50, 30) = 20
+  cumulative flow = 260
+  residual (spare capacity): AIRHEAD-7->FOB-LIMA 25  AIRHEAD-7->FOB-MIKE 25  LANE-J1->AIRHEAD-7 40  LANE-J1->LANE-J2 30  LANE-J2->FOB-MIKE 10  LANE-J2->LANE-J1 90
+  residual (reverse/cancel): FOB-KILO->LANE-J1 60  FOB-KILO->LANE-J2 50  FOB-KILO->STRAIT-3 80  FOB-LIMA->LANE-J2 50  FOB-MIKE->LANE-J2 20  LANE-J1->HUB-ALPHA 120  LANE-J2->HUB-BRAVO 60  LANE-J2->LANE-J1 60  STRAIT-3->HUB-ALPHA 80
+
+No augmenting path remains -> flow is maximum.
+
+Max throughput (s->t, units/window): 260
+Min-cut capacity (= max flow, by duality): 260
+
+Witness cut -- the cheapest capacity-weighted blockade.
+Sever these lanes and throughput cannot exceed the value above:
+  HUB-ALPHA -> LANE-J1      capacity 120
+  HUB-ALPHA -> STRAIT-3     capacity 80
+  HUB-BRAVO -> LANE-J2      capacity 60
+
+This cut is the certificate: it proves no plan can move more.

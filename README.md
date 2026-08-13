@@ -303,7 +303,7 @@ make api      # uvicorn clopt.api:app  ->  http://localhost:8000/docs
 | `GET /route?from=&to=&safest=&threat=` | single-convoy path |
 | `GET /sweep?lambdas=&threat=` | cost/risk frontier rows, each with the plan's legs |
 | `GET /naive?lambdas=&threat=` | Day 1's unbuildable plan, complete, one per lambda |
-| `GET /maxflow?threat=` | max throughput + min-cut certificate |
+| `GET /maxflow?trace=&threat=` | max throughput + min-cut certificate; `trace=true` adds every Edmonds-Karp augmentation |
 | `GET /interdict?budget=&method=&threat=` | adversary's cheapest blockade |
 
 One server serves every theater. Each endpoint above also takes an optional
@@ -413,6 +413,64 @@ Three details a client depends on:
 - **`notional_cost` is named to carry its own asterisk.** It undercuts the
   feasible optimum precisely because it is buying capacity that does not exist.
 
+### `/maxflow?trace=true`: the whole Edmonds–Karp run, statelessly
+
+Day 2 steps through the augmentations with the arrow keys, so the entire trace
+ships as **one array in one call**. Each entry is a *complete snapshot* rather
+than a delta against the entry before it, which is what makes stepping backward
+an index decrement instead of a re-solve — and why no server-side cursor is
+needed. `trace=false` (the default) returns the same four fields it always did,
+with `trace` an empty array.
+
+```jsonc
+// GET /maxflow?dataset=textbook_maxflow&trace=true
+{ "max_throughput": 7.0, "cut_capacity": 7.0,
+  "source_side": ["A", "B", "C", "s"],
+  "cut_lanes": [ { "src": "B", "dst": "t", "capacity": 5.0 },
+                 { "src": "A", "dst": "D", "capacity": 2.0 } ],
+  "trace": [
+    { "iteration": 0, "path": [], "lane_residuals": [],
+      "bottleneck": 0.0, "total_after": 0.0,
+      "forward_residual": [ { "src": "A", "dst": "B", "residual": 3.0 },
+                            { "src": "__source__", "dst": "s", "residual": null } ],
+      "reverse_residual": [], "used_reverse": [],
+      "flows": [ { "src": "A", "dst": "B", "flow": 0.0 } ] },
+    { "iteration": 3, "path": ["__source__", "s", "C", "B", "A", "D", "t", "__sink__"],
+      "lane_residuals": [null, 3.0, 4.0, 3.0, 2.0, 4.0, null],
+      "bottleneck": 2.0, "total_after": 7.0,
+      "used_reverse": [ { "src": "B", "dst": "A" } ] }
+  ]
+}
+```
+
+Five things a client depends on:
+
+- **`iteration` 0 is a prepended "before" snapshot**, not an augmentation: empty
+  path, zero bottleneck, initial residuals. The uniform render rule is
+  *residuals from step k−1, path annotation from step k*, and iteration 1 has no
+  before-state without it. Synthesising one in JavaScript would mean building
+  residual graphs in the browser.
+- **One entry per augmentation, not per drawn frame.** The instructor says
+  "iteration 3", so the array indexes the way the CLI output and the hand-trace
+  on the board do. A frontend wanting two beats per iteration sub-steps them.
+- **Paths retain the synthetic terminals** `__source__` / `__sink__` (reserved
+  ids; scenario files use uppercase-hyphen ids, so they cannot collide).
+  Stripped, a route appears to begin mid-graph with the dashed arc it crossed
+  left dark.
+- **`lane_residuals` is one term per hop** — entry *i* is the arc `path[i] →
+  path[i+1]` — so a `min(...)` term can always be anchored to the lane it came
+  from. **`null` means unbounded**, not unknown: the terminal arcs are built at
+  infinity so cuts land on lanes, and JSON cannot encode that. Draw it as no
+  numeral, which is right anyway.
+- **`flows` states every arc, zeros included.** A saturated lane leaves the
+  residual lists entirely, which made it indistinguishable from a lane that does
+  not exist — and saturated lanes are exactly what Day 2 wants drawn. Computed
+  server-side rather than as `cap − residual` in the browser, so the screen and
+  the API cannot quietly diverge.
+
+The CLI narrows all of this at print time — no terminals, no `null` terms, no
+iteration 0 — so `clopt maxflow --trace` reads exactly as it always has.
+
 ---
 
 ## Project layout
@@ -440,6 +498,8 @@ tests/
   test_maxflow_interdiction.py  # Edmonds-Karp = 7, min-cut certificate, interdiction
   test_scenarios.py          # every file in data/ loads and its threats apply
   test_api_contract.py       # HTTP contract: dataset ids, cycle order, 404s
+  test_cli_maxflow_trace.py  # the --trace lecture text, pinned to golden files
+  golden/                    # expected CLI output, character for character
 docs/
   DESIGN_WALKTHROUGH.md  # how and in what order the repo was built, and why
 ```

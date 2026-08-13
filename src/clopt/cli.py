@@ -20,7 +20,7 @@ from typing import List
 from .routing import cheapest_path, naive_plan, safest_path
 from .scenario import load_scenario
 from .solver import pareto_sweep, solve_allocation
-from .throughput import max_flow_min_cut
+from .throughput import SYNTHETIC_IDS, max_flow_min_cut
 from .interdiction import budget_interdiction, min_cut_interdiction
 
 
@@ -227,6 +227,21 @@ def cmd_sweep(args) -> int:
    return 0
 
 
+def _real_lanes(arcs):
+   """Trace arcs a student should see: real endpoints, printable numbers.
+
+   The trace ships complete -- synthetic terminals named, unbounded residuals
+   carried as `None` -- because the API's consumer draws all of it. The
+   classroom text wants neither: a super-source arc is scaffolding, and `inf` is
+   not a capacity anyone writes on a board. So the narrowing lives here, at the
+   point of display, rather than in the data layer where it used to cost the
+   drawing consumer its alignment. Takes (u, v) pairs or (u, v, value) triples.
+   """
+   return [arc for arc in arcs
+           if arc[0] not in SYNTHETIC_IDS and arc[1] not in SYNTHETIC_IDS
+           and (len(arc) < 3 or arc[2] is not None)]
+
+
 def cmd_maxflow(args) -> int:
    _, net = _load(args)
    res = max_flow_min_cut(net, trace=getattr(args, "trace", False))
@@ -246,20 +261,27 @@ def cmd_maxflow(args) -> int:
       print("(BFS picks a fewest-hop augmenting path each round; ties may pick a")
       print(" different-but-valid path than a handout, so this is *a* correct run.)\n")
       for st in res.trace:
-         path = " -> ".join(st.path)
-         terms = ", ".join(f"{c:g}" for c in st.lane_residuals)
+         if st.iteration == 0:
+               # The pre-augmentation snapshot exists so a drawing consumer has
+               # a "before" for iteration 1. Nobody says "iteration 0" aloud.
+               continue
+         path = " -> ".join(n for n in st.path if n not in SYNTHETIC_IDS)
+         terms = ", ".join(f"{c:g}" for c in st.lane_residuals if c is not None)
          print(f"Iteration {st.iteration}: {path}")
          print(f"  bottleneck = min({terms}) = {st.bottleneck:g}")
          print(f"  cumulative flow = {st.total_after:g}")
-         if st.used_reverse:
-               arcs = ", ".join(f"{u}->{v}" for u, v in st.used_reverse)
+         used_reverse = _real_lanes(st.used_reverse)
+         if used_reverse:
+               arcs = ", ".join(f"{u}->{v}" for u, v in used_reverse)
                print(f"  * uses reverse arc(s) {arcs} to cancel/reroute earlier flow "
                      f"-- this is where the residual graph earns its keep")
-         if st.forward_residual:
-               fwd = "  ".join(f"{u}->{v} {c:g}" for u, v, c in st.forward_residual)
+         forward_residual = _real_lanes(st.forward_residual)
+         if forward_residual:
+               fwd = "  ".join(f"{u}->{v} {c:g}" for u, v, c in forward_residual)
                print(f"  residual (spare capacity): {fwd}")
-         if st.reverse_residual:
-               rev = "  ".join(f"{u}->{v} {c:g}" for u, v, c in st.reverse_residual)
+         reverse_residual = _real_lanes(st.reverse_residual)
+         if reverse_residual:
+               rev = "  ".join(f"{u}->{v} {c:g}" for u, v, c in reverse_residual)
                print(f"  residual (reverse/cancel): {rev}")
          print()
       print("No augmenting path remains -> flow is maximum.\n")

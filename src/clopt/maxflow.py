@@ -32,12 +32,24 @@ class _Arc:
 
 @dataclass
 class AugmentationStep:
-   """One BFS augmentation, captured for hand-trace / classroom display."""
+   """One BFS augmentation, captured for hand-trace / classroom display.
+
+   A *complete snapshot*, not a delta against the step before it: the residual
+   graph and every arc's flow are stated in full every time. That is what lets a
+   consumer draw step k without having replayed steps 1..k-1, and makes stepping
+   backward through a trace an index decrement rather than a re-solve.
+
+   Nothing is filtered out here. `lane_residuals` carries one term per path arc
+   including the infinite ones, so it stays index-aligned with `path` and a
+   `min(...)` term can be anchored to the arc it came from; a caller that wants
+   tidier output narrows it at the point of display.
+   """
    path: List[int]                                   # node indices, source..sink
-   lane_residuals: List[float]                       # pre-push residual of finite arcs on path
+   lane_residuals: List[float]                       # pre-push residual of every path arc
    bottleneck: float
    total_after: float
    residual_edges: List[tuple[int, int, float, bool]]  # (u, v, residual, is_backward) post-push
+   flows: List[tuple[int, int, float]] = field(default_factory=list)  # (u, v, flow) per original arc
    reverse_used: List[tuple[int, int]] = field(default_factory=list)  # cancellation arcs traversed
 
 
@@ -96,9 +108,37 @@ class EdmondsKarp:
       path.reverse()
       return path
    
+   def _snapshot(self, nodes: List[int], pre: List[float], bottleneck: float,
+                 total: float, rev_used: List[Tuple[int, int]]) -> AugmentationStep:
+      """The whole residual graph and every arc's flow, as they stand right now."""
+      residual_edges: List[Tuple[int, int, float, bool]] = []
+      for idx, arc in enumerate(self.arcs):
+         if arc.cap > 1e-12:
+            residual_edges.append((self.arcs[idx ^ 1].to, arc.to, arc.cap, idx % 2 == 1))
+      # Every original arc, carrying zero where it carries zero. An arc absent
+      # from `residual_edges` is saturated, not missing, and only a flow stated
+      # for all of them tells those two apart.
+      flows = [(self.arcs[fwd ^ 1].to, self.arcs[fwd].to, self.arcs[fwd ^ 1].cap)
+               for fwd in self._forward]
+      return AugmentationStep(
+         path=nodes,
+         lane_residuals=pre,
+         bottleneck=bottleneck,
+         total_after=total,
+         residual_edges=residual_edges,
+         flows=flows,
+         reverse_used=rev_used,
+      )
+
    def max_flow(self, s: int, t: int, trace: bool = False) -> float:
       self.trace = []
       total = 0.0
+      if trace:
+         # Step 0: the graph before anything is pushed. The first augmentation
+         # otherwise has no "before" state to be drawn against, and
+         # reconstructing one downstream would mean rebuilding the residual
+         # graph outside the solver that owns it.
+         self.trace.append(self._snapshot([], [], 0.0, 0.0, []))
       while True:
          path = self._bfs_augmenting_path(s, t)
          if path is None:
@@ -115,20 +155,7 @@ class EdmondsKarp:
             self.arcs[a ^ 1].cap += bottleneck
          total += bottleneck
          if trace:
-            residual_edges: List[Tuple[int, int, float, bool]] = []
-            for idx, arc in enumerate(self.arcs):
-               if arc.cap > 1e-12:
-                  u = self.arcs[idx ^ 1].to
-                  v = arc.to
-                  residual_edges.append((u, v, arc.cap, idx % 2 == 1))
-            self.trace.append(AugmentationStep(
-               path=nodes,
-               lane_residuals=[c for c in pre if c != INF],
-               bottleneck=bottleneck,
-               total_after=total,
-               residual_edges=residual_edges,
-               reverse_used=rev_used,
-            ))
+            self.trace.append(self._snapshot(nodes, pre, bottleneck, total, rev_used))
       return total
    
    def min_cut_source_side(self, s: int) -> List[bool]:

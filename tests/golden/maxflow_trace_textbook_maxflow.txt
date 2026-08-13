@@ -1,0 +1,34 @@
+Edmonds-Karp, iteration by iteration
+(BFS picks a fewest-hop augmenting path each round; ties may pick a
+ different-but-valid path than a handout, so this is *a* correct run.)
+
+Iteration 1: s -> A -> B -> t
+  bottleneck = min(3, 3, 5) = 3
+  cumulative flow = 3
+  residual (spare capacity): A->D 2  B->t 2  C->B 6  D->t 4  s->C 5
+  residual (reverse/cancel): A->s 3  B->A 3  t->B 3
+
+Iteration 2: s -> C -> B -> t
+  bottleneck = min(5, 6, 2) = 2
+  cumulative flow = 5
+  residual (spare capacity): A->D 2  C->B 4  D->t 4  s->C 3
+  residual (reverse/cancel): A->s 3  B->A 3  B->C 2  C->s 2  t->B 5
+
+Iteration 3: s -> C -> B -> A -> D -> t
+  bottleneck = min(3, 4, 3, 2, 4) = 2
+  cumulative flow = 7
+  * uses reverse arc(s) B->A to cancel/reroute earlier flow -- this is where the residual graph earns its keep
+  residual (spare capacity): A->B 2  C->B 2  D->t 2  s->C 1
+  residual (reverse/cancel): A->s 3  B->A 1  B->C 4  C->s 4  D->A 2  t->B 5  t->D 2
+
+No augmenting path remains -> flow is maximum.
+
+Max throughput (s->t, units/window): 7
+Min-cut capacity (= max flow, by duality): 7
+
+Witness cut -- the cheapest capacity-weighted blockade.
+Sever these lanes and throughput cannot exceed the value above:
+  B -> t            capacity 5
+  A -> D            capacity 2
+
+This cut is the certificate: it proves no plan can move more.
