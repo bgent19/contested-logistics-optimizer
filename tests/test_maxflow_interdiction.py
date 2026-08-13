@@ -1,7 +1,7 @@
 """Tests for Edmonds-Karp max-flow, the min-cut certificate, and interdiction.
 
-The max-flow tests are pinned to the unit's Day 2 worked example (max flow 14)
-and Day 3 result (min cut also 14), so a regression is a concrete wrong number
+The max-flow tests are pinned to the unit's Day 2 worked example (max flow 7)
+and Day 3 result (min cut also 7), so a regression is a concrete wrong number
 against the published notes.
 """
 
@@ -19,25 +19,31 @@ THEATER = os.path.abspath(os.path.join(DATA, "theater_sample.json"))
 
 # ---- core Edmonds-Karp ---------------------------------------------------
 def test_edmonds_karp_textbook_value():
-    # Build the Day 2 graph directly: s=0,A=1,B=2,C=3,D=4,t=5
+    # Build the Day 2 graph directly: s=0,A=1,B=2,C=3,D=4,t=5.
+    # Edge insertion order mirrors the JSON, which is load-bearing -- see
+    # test_textbook_trace_demonstrates_cancellation.
     g = EdmondsKarp(6)
-    g.add_edge(0, 1, 10)  # s->A
-    g.add_edge(0, 2, 10)  # s->B
-    g.add_edge(1, 3, 4)   # A->C
-    g.add_edge(1, 4, 2)   # A->D
-    g.add_edge(2, 4, 9)   # B->D
-    g.add_edge(3, 5, 10)  # C->t
-    g.add_edge(4, 5, 10)  # D->t
-    assert g.max_flow(0, 5) == 14
+    g.add_edge(0, 1, 3)  # s->A
+    g.add_edge(1, 2, 3)  # A->B
+    g.add_edge(2, 5, 5)  # B->t
+    g.add_edge(0, 3, 5)  # s->C
+    g.add_edge(3, 2, 6)  # C->B
+    g.add_edge(1, 4, 2)  # A->D
+    g.add_edge(4, 5, 4)  # D->t
+    assert g.max_flow(0, 5) == 7
 
 
 def test_max_flow_equals_min_cut_textbook():
     net = load_scenario(TEXTBOOK).under(None)
     res = max_flow_min_cut(net)
-    assert res.value == 14
+    assert res.value == 7
     # Max-Flow Min-Cut: the witness cut capacity equals the flow value.
-    assert res.cut_capacity == 14
+    assert res.cut_capacity == 7
     assert len(res.cut_lanes) >= 1
+    # The cut is two *interior* lanes, not the trivial set leaving the source,
+    # and the source side is the non-obvious {s, A, B, C}.
+    assert {(c.src, c.dst) for c in res.cut_lanes} == {("B", "t"), ("A", "D")}
+    assert set(res.source_side) == {"s", "A", "B", "C"}
 
 
 # ---- theater throughput --------------------------------------------------
@@ -53,7 +59,7 @@ def test_min_cut_interdiction_matches_throughput():
     net = load_scenario(TEXTBOOK).under(None)
     inter = min_cut_interdiction(net)
     # Capacity-cost to zero out flow equals the max flow (Max-Flow Min-Cut).
-    assert inter.cut_capacity == inter.baseline_throughput == 14
+    assert inter.cut_capacity == inter.baseline_throughput == 7
 
 
 def test_budget_interdiction_two_edges_can_sever_textbook():
@@ -95,10 +101,37 @@ def test_trace_reaches_max_flow():
     res = max_flow_min_cut(net, trace=True)
     assert res.trace, "trace should have at least one augmentation"
     # Bottlenecks sum to the max-flow value, totals are monotone, last equals value.
-    assert sum(s.bottleneck for s in res.trace) == res.value == 14
+    assert sum(s.bottleneck for s in res.trace) == res.value == 7
     totals = [s.total_after for s in res.trace]
     assert totals == sorted(totals)
-    assert totals[-1] == 14
+    assert totals[-1] == 7
     # Every step's path starts at the real source and ends at the real sink.
     for s in res.trace:
         assert s.path[0] == "s" and s.path[-1] == "t"
+
+
+def test_textbook_trace_demonstrates_cancellation():
+    """The whole reason this dataset exists: Edmonds-Karp undoes its own decision.
+
+    The JSON edge array order is load-bearing. `throughput._build` adds lanes in
+    file order and `EdmondsKarp._bfs_augmenting_path` scans `adj[u]` in insertion
+    order, so the order of `edges` selects which trace the students see: of the
+    5040 orderings of these 7 lanes only 25% demonstrate cancellation, and half
+    collapse to a 2-iteration trace with none at all. A tidy-up that groups the
+    lanes by source node would silently revert Day 2. The exact condition is
+    `s->A` before `s->C` and `A->B` before `A->D`; these assertions pin it.
+    """
+    net = load_scenario(TEXTBOOK).under(None)
+    res = max_flow_min_cut(net, trace=True)
+
+    # Three augmentations, pushing 3 / 2 / 2.
+    assert [s.bottleneck for s in res.trace] == [3, 2, 2]
+
+    # Iteration 3 walks the backward arc B->A, cancelling 2 of the 3 units
+    # committed to lane A->B in iteration 1. Partial, not total: A->B ends
+    # carrying 1, so the lane visibly loses units rather than blinking out.
+    assert [s.used_reverse for s in res.trace] == [[], [], [("B", "A")]]
+    assert res.trace[2].path == ["s", "C", "B", "A", "D", "t"]
+
+    # Edmonds-Karp's non-decreasing path length, on screen rather than asserted.
+    assert [len(s.path) - 1 for s in res.trace] == [3, 3, 5]
