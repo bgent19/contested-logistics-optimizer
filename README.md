@@ -302,6 +302,7 @@ make api      # uvicorn clopt.api:app  ->  http://localhost:8000/docs
 | `GET /allocate?risk_aversion=&threat=` | full allocation plan with per-leg flow |
 | `GET /route?from=&to=&safest=&threat=` | single-convoy path |
 | `GET /sweep?lambdas=&threat=` | cost/risk frontier rows, each with the plan's legs |
+| `GET /naive?lambdas=&threat=` | Day 1's unbuildable plan, complete, one per lambda |
 | `GET /maxflow?threat=` | max throughput + min-cut certificate |
 | `GET /interdict?budget=&method=&threat=` | adversary's cheapest blockade |
 
@@ -367,6 +368,50 @@ One authoring trap, known and not fixed: disruption declarations match on the
 **stored direction only**, so a threat picture written with `src`/`dst`
 reversed matches nothing and fails silently. Authoring a new theater means
 checking that each declaration actually moves an edge.
+
+### `/sweep` and `/naive`: two arrays on one lambda index
+
+The pair that Day 1's dial is built on. Both take the same `lambdas` parameter
+with the same default, and both return one entry per value in the order asked
+for — `/sweep` the *optimum* at each lambda, `/naive` the plan you get by
+serving every destination from its own cheapest origin and ignoring what that
+adds up to. The k-th entry of each describes the same lambda, so flipping
+between the collapse and the optimum on screen is a swap at one index.
+
+```jsonc
+// GET /naive?lambdas=0,50
+[ { "risk_aversion": 0.0,
+    "convoys": [ { "dst": "FOB-KILO", "origin": "HUB-ALPHA", "quantity": 70.0,
+                   "path": ["HUB-ALPHA", "STRAIT-3", "FOB-KILO"],
+                   "total_cost": 4.0, "total_effective": 4.0,
+                   "survival": 0.33, "found": true } ],
+    "lanes":   [ { "src": "HUB-BRAVO", "dst": "LANE-J2",
+                   "load": 90.0, "cap": 60.0, "over": true, "overage": 30.0 } ],
+    "sources": [ { "id": "HUB-ALPHA", "dispatched": 70.0, "stock": 120.0,
+                   "over": false, "overage": 0.0 },
+                 { "id": "HUB-BRAVO", "dispatched": 90.0, "stock": 60.0,
+                   "over": true, "overage": 30.0 } ],
+    "notional_cost": 1080.0, "unserved": 0.0 } ]
+```
+
+Both are **stateless and prefetchable**: the whole lambda array arrives in one
+call, and each `/naive` entry is a complete plan rather than a delta against
+the entry before it. That is deliberate — the teaching frontend renders
+synchronously, so a keypress can never wait on a fetch.
+
+Three details a client depends on:
+
+- **One convoy per demand node, always.** A destination nothing reaches is a
+  `found: false` convoy with an empty path and `null` costs (`Infinity` is not
+  JSON), its quantity counted into `unserved` — not an omitted row. So the
+  convoy list is never reconciled against the node list.
+- **`lanes` is loaded lanes only; `sources` is *every* supply hub**, including
+  idle and healthy ones. Deliberately asymmetric: an absent lane means load
+  zero and the client already has every edge from `/scenario`, but filtering
+  sources to violations would throw away the idle hub standing beside the
+  overdrawn one — which is half of what Day 1 is arguing.
+- **`notional_cost` is named to carry its own asterisk.** It undercuts the
+  feasible optimum precisely because it is buying capacity that does not exist.
 
 ---
 
