@@ -5,11 +5,19 @@ Run with:
 or via the Makefile / Docker. Interactive docs at /docs.
 
 The API loads *every* dataset in `data/` at startup (plus whatever CLOPT_DATA
-names, if that path lives elsewhere) and serves allocation, routing, and
-Pareto-sweep queries against any of them: each endpoint takes an optional
-`dataset` query parameter, defaulting to the CLOPT_DATA dataset. Loading is
-eager, so a file that will not load stops the server at start instead of
-becoming a mid-class 500 -- see `clopt.datasets`.
+names, if that path lives elsewhere) and serves allocation, routing,
+Pareto-sweep and naive-plan queries against any of them: each endpoint takes an
+optional `dataset` query parameter, defaulting to the CLOPT_DATA dataset.
+Loading is eager, so a file that will not load stops the server at start
+instead of becoming a mid-class 500 -- see `clopt.datasets`.
+
+/sweep and /naive are a matched pair, and the pairing is load-bearing: they
+take the same lambda list with the same default and return entries in the same
+order, so the teaching frontend holds two arrays it indexes by one position --
+the optimum and the collapse at each lambda. Everything the two share is
+declared once here (`LAMBDAS_QUERY`, `_lambda_values`) rather than spelled
+twice, because a drift between them puts the naive plan on the projector
+beside the wrong optimum: a wrong lecture that looks entirely correct.
 
 The same in-memory `Scenario` is reused; each request applies its threat
 picture to a fresh copy, so requests never leak state.
@@ -17,6 +25,7 @@ picture to a fresh copy, so requests never leak state.
 
 from  __future__ import annotations
 
+import math
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -24,7 +33,10 @@ from pydantic import BaseModel
 
 from .datasets import DatasetRegistry, build_registry
 from .model import Disruption, DisruptionKind, Edge, Node, NodeKind
-from .routing import cheapest_path, safest_path
+from .routing import (
+   LaneLoad, NaiveConvoy, NaivePlan, SourceLoad,
+   cheapest_path, naive_plan, safest_path,
+)
 from .scenario import Scenario
 from .solver import AllocationResult, solve_allocation, pareto_sweep
 from .throughput import max_flow_min_cut
@@ -41,6 +53,14 @@ app = FastAPI(
 _registry: DatasetRegistry = build_registry()
 
 DATASET_QUERY = Query(None, description="Dataset id (filename stem); omit for the default.")
+
+# One declaration, shared by /sweep and /naive. The frontend prefetches both and
+# then holds two arrays it indexes by the same position, so the parameter name
+# and the default must be *the same object*, not two literals that agree today.
+LAMBDAS_QUERY = Query(
+   "0,1,2,5,10,25,50,100",
+   description="Comma-separated lambda values; one entry each, plan included.",
+)
 
 
 def get_registry() -> DatasetRegistry:
@@ -74,6 +94,14 @@ def _net_for(dataset: Optional[str], threat: Optional[str]):
       # `str(KeyError)` is the message's *repr*, quotes and all; unwrap it so
       # an unknown threat and an unknown dataset read the same way in JSON.
       raise HTTPException(status_code=404, detail=str(exc.args[0]))
+
+
+def _lambda_values(lambdas: str) -> List[float]:
+   """Parse a `LAMBDAS_QUERY` list, or 400."""
+   try:
+      return [float(x) for x in lambdas.split(",")]
+   except ValueError:
+      raise HTTPException(status_code=400, detail="lambdas must be comma-separated numbers.")
 
 
 # ---- response models --------------------------------------------------------
@@ -130,6 +158,67 @@ class SweepRow(BaseModel):
    transit_cost: float
    risk_exposure: float
    legs: List[Leg]
+
+
+class NaiveConvoyOut(BaseModel):
+   """One demand node's resupply, routed as if it were the only one."""
+
+   dst: str
+   origin: str   # "" when nothing reaches this destination
+   quantity: float
+   path: List[str]
+   # `null`, not infinity, when `found` is false. The core says INF, which is
+   # the honest answer to "what does an impossible convoy cost", but `Infinity`
+   # is not JSON -- `JSON.parse` throws on it and the browser loses the whole
+   # response rather than one cell. The CLI's `--json` keeps INF: a terminal
+   # reader is better served by the honest value. See `_finite_or_null`.
+   total_cost: Optional[float]
+   total_effective: Optional[float]
+   survival: float
+   found: bool
+
+
+class LaneLoadOut(BaseModel):
+   """What the superimposed convoys ask of one directed lane, against its cap.
+
+   `over` and `overage` are properties in the core and plain fields here: the
+   frontend colours a lane from them, and recomputing `load > cap` in
+   JavaScript is how a rounding difference puts a red lane on the projector
+   that the API does not agree is red.
+   """
+
+   src: str
+   dst: str
+   load: float
+   cap: float
+   over: bool
+   overage: float
+
+
+class SourceLoadOut(BaseModel):
+   """What one hub is asked to dispatch, against what it actually holds."""
+
+   id: str
+   dispatched: float
+   stock: float
+   over: bool
+   overage: float
+
+
+class NaivePlanRow(BaseModel):
+   """One lambda's naive plan, complete.
+
+   *Complete*, not a delta against the lambda before it: a delta format saves
+   bytes on a payload measured in kilobytes and buys a reconstruction step the
+   frontend can get wrong. The `SweepRow` counterpart is described on `naive`.
+   """
+
+   risk_aversion: float
+   convoys: List[NaiveConvoyOut]   # exactly one per demand node, always
+   lanes: List[LaneLoadOut]        # loaded lanes only
+   sources: List[SourceLoadOut]    # every supply node, idle ones included
+   notional_cost: float
+   unserved: float
 
 
 class DatasetSummary(BaseModel):
@@ -258,6 +347,48 @@ def _disruption_out(disruption: Disruption) -> DisruptionOut:
                         note=disruption.note)
 
 
+def _finite_or_null(value: float) -> Optional[float]:
+   """A cost, or `null` where the core says infinity. See `NaiveConvoyOut`.
+
+   Pydantic's serializer would also render a non-finite float as `null`, but
+   that is a library default (`ser_json_inf_nan`) rather than something this
+   module promises. Converting here puts the wire contract in the code that
+   owns it, and a config flip elsewhere cannot quietly ship `Infinity`.
+   """
+   return value if math.isfinite(value) else None
+
+
+def _convoy_out(convoy: NaiveConvoy) -> NaiveConvoyOut:
+   return NaiveConvoyOut(
+      dst=convoy.dst, origin=convoy.origin, quantity=convoy.quantity,
+      path=convoy.path, total_cost=_finite_or_null(convoy.total_cost),
+      total_effective=_finite_or_null(convoy.total_effective),
+      survival=convoy.survival, found=convoy.found,
+   )
+
+
+def _lane_load_out(lane: LaneLoad) -> LaneLoadOut:
+   return LaneLoadOut(src=lane.src, dst=lane.dst, load=lane.load, cap=lane.cap,
+                      over=lane.over, overage=lane.overage)
+
+
+def _source_load_out(source: SourceLoad) -> SourceLoadOut:
+   return SourceLoadOut(id=source.id, dispatched=source.dispatched,
+                        stock=source.stock, over=source.over,
+                        overage=source.overage)
+
+
+def _naive_plan_out(plan: NaivePlan) -> NaivePlanRow:
+   return NaivePlanRow(
+      risk_aversion=plan.risk_aversion,
+      convoys=[_convoy_out(c) for c in plan.convoys],
+      lanes=[_lane_load_out(l) for l in plan.lanes],
+      sources=[_source_load_out(s) for s in plan.sources],
+      notional_cost=plan.notional_cost,
+      unserved=plan.unserved,
+   )
+
+
 def _threat_picture_out(sc: Scenario, name: str) -> ThreatPictureOut:
    return ThreatPictureOut(
       disruptions=[_disruption_out(d) for d in sc.threat_pictures[name]],
@@ -355,21 +486,40 @@ def route(
 
 @app.get("/sweep", response_model=List[SweepRow])
 def sweep(
-   lambdas: str = Query("0,1,2,5,10,25,50,100",
-                        description="Comma-separated lambda values; one row each, plan included."),
+   lambdas: str = LAMBDAS_QUERY,
    threat: Optional[str] = Query(None),
    dataset: Optional[str] = DATASET_QUERY,
 ) -> List[SweepRow]:
-   try:
-      values = [float(x) for x in lambdas.split(",")]
-   except ValueError:
-      raise HTTPException(status_code=400, detail="lambdas must be comma-separated numbers.")
-   results = pareto_sweep(_net_for(dataset, threat), values)
+   results = pareto_sweep(_net_for(dataset, threat), _lambda_values(lambdas))
    return [
       SweepRow(risk_aversion=r.risk_aversion, fill_rate=r.fill_rate,
                transit_cost=r.transit_cost, risk_exposure=r.risk_exposure,
                legs=_legs(r))
       for r in results
+   ]
+
+
+@app.get("/naive", response_model=List[NaivePlanRow])
+def naive(
+   lambdas: str = LAMBDAS_QUERY,
+   threat: Optional[str] = Query(None),
+   dataset: Optional[str] = DATASET_QUERY,
+) -> List[NaivePlanRow]:
+   """Day 1's counterexample, one complete plan per lambda.
+
+   The mirror of /sweep: same parameter, same default, same order, so the two
+   responses are arrays a frontend indexes by the same position -- /sweep for
+   the optimum, /naive for the collapse -- and the A/B flip is a swap at one
+   index rather than a reconciliation.
+
+   Stateless and complete. The whole array ships in one call because the
+   frontend renders synchronously and a keypress can never await a fetch, and
+   each entry is a whole plan rather than a delta against the entry before it.
+   """
+   net = _net_for(dataset, threat)
+   return [
+      _naive_plan_out(naive_plan(net, risk_aversion=value))
+      for value in _lambda_values(lambdas)
    ]
 
 

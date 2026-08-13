@@ -46,6 +46,7 @@ def _endpoint_cases(dataset_id):
         ("allocate", "/allocate", {"risk_aversion": 25}),
         ("route", "/route", {"from": src, "to": dst}),
         ("sweep", "/sweep", {"lambdas": "0,10"}),
+        ("naive", "/naive", {"lambdas": "0,10"}),
         ("maxflow", "/maxflow", {}),
         ("interdict", "/interdict", {"budget": 1}),
     ]
@@ -426,6 +427,11 @@ LEG_FIELDS = {"src", "dst", "flow", "cost", "risk"}
 SWEEP_LAMBDAS = [0.0, 10.0, 25.0]
 SWEEP_QUERY = ",".join(str(lam) for lam in SWEEP_LAMBDAS)
 
+# The frontier both lambda-taking endpoints serve when asked for nothing in
+# particular -- pinned here so "the same default" is anchored to a value rather
+# than to the two endpoints agreeing with each other.
+DEFAULT_LAMBDAS = [0.0, 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0]
+
 
 @pytest.mark.parametrize("dataset_id", DATASET_IDS)
 def test_sweep_returns_one_row_per_requested_lambda(dataset_id):
@@ -477,6 +483,202 @@ def test_allocate_response_shape_is_untouched():
     }
     for leg in body["legs"]:
         assert set(leg) == LEG_FIELDS
+
+
+# ---- the naive plan, one complete plan per lambda ---------------------------
+# Day 1's dial shows the collapse beside the optimum at whatever lambda the room
+# shouts, so the naive plan is prefetched per lambda exactly as the sweep is.
+# What is pinned here is *shape*: the numbers on the board live in
+# `tests/test_naive.py` at full truth, and pinning them twice would mean one
+# capacity edit turns the suite red in two places.
+CONVOY_FIELDS = {
+    "dst", "origin", "quantity", "path", "total_cost", "total_effective",
+    "survival", "found",
+}
+LANE_LOAD_FIELDS = {"src", "dst", "load", "cap", "over", "overage"}
+SOURCE_LOAD_FIELDS = {"id", "dispatched", "stock", "over", "overage"}
+
+
+def _lambda_call(path, dataset_id, lambdas=SWEEP_QUERY, **params):
+    """GET a lambda-taking endpoint. `lambdas=None` omits it, taking the default.
+
+    One helper for both, because half of what this section checks is that the
+    two are asked the same question.
+    """
+    query = {"dataset": dataset_id, **params}
+    if lambdas is not None:
+        query["lambdas"] = lambdas
+    response = client.get(path, params=query)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _naive(dataset_id, lambdas=SWEEP_QUERY, **params):
+    return _lambda_call("/naive", dataset_id, lambdas, **params)
+
+
+def _sweep(dataset_id, lambdas=SWEEP_QUERY, **params):
+    return _lambda_call("/sweep", dataset_id, lambdas, **params)
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_naive_returns_one_complete_plan_per_lambda(dataset_id):
+    plans = _naive(dataset_id)
+    assert [plan["risk_aversion"] for plan in plans] == SWEEP_LAMBDAS
+    for plan in plans:
+        # *Complete*: every field of the core's NaivePlan, not a digest. The
+        # frontend draws convoys, red lanes and the source ledger from this one
+        # response and never asks a follow-up question.
+        assert set(plan) == {
+            "risk_aversion", "convoys", "lanes", "sources",
+            "notional_cost", "unserved",
+        }
+        for convoy in plan["convoys"]:
+            assert set(convoy) == CONVOY_FIELDS
+        for lane in plan["lanes"]:
+            assert set(lane) == LANE_LOAD_FIELDS
+        for source in plan["sources"]:
+            assert set(source) == SOURCE_LOAD_FIELDS
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_naive_takes_the_whole_lambda_array_in_one_stateless_call(dataset_id):
+    # No server-side cursor: the same request twice is the same answer, and
+    # asking for the array in one call equals asking for each lambda alone.
+    together = _naive(dataset_id, lambdas="0,50")
+    assert together == _naive(dataset_id, lambdas="0,50")
+    assert together == _naive(dataset_id, lambdas="0") + _naive(dataset_id, lambdas="50")
+
+
+# The assertion that matters most: nothing else in the system checks that the
+# two prefetched arrays line up, and if they drift the projector shows the naive
+# plan beside the wrong optimum -- a wrong lecture that looks entirely correct.
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+@pytest.mark.parametrize("lambdas", [SWEEP_QUERY, "0", "100,0,7.5"])
+def test_sweep_and_naive_arrays_align_lambda_for_lambda(dataset_id, lambdas):
+    optima = _sweep(dataset_id, lambdas=lambdas)
+    collapses = _naive(dataset_id, lambdas=lambdas)
+
+    assert len(optima) == len(collapses)
+    for k, (optimum, collapse) in enumerate(zip(optima, collapses)):
+        assert optimum["risk_aversion"] == collapse["risk_aversion"], (
+            f"index {k}: /sweep serves lambda {optimum['risk_aversion']} where "
+            f"/naive serves {collapse['risk_aversion']}; the flip would draw "
+            f"the naive plan beside the wrong optimum"
+        )
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_sweep_and_naive_share_a_parameter_name_and_a_default(dataset_id):
+    # Same param name and same default, so the frontend prefetches both with
+    # one lambda array -- or with none at all.
+    optima = _sweep(dataset_id, lambdas=None)
+    collapses = _naive(dataset_id, lambdas=None)
+    assert [row["risk_aversion"] for row in optima] == DEFAULT_LAMBDAS
+    assert [plan["risk_aversion"] for plan in collapses] == DEFAULT_LAMBDAS
+
+
+def test_naive_rejects_a_lambda_list_that_is_not_numbers_the_way_sweep_does():
+    for path in ("/sweep", "/naive"):
+        response = client.get(path, params={"lambdas": "0,soon"})
+        assert response.status_code == 400, path
+
+
+# Convoy count equals demand-node count, always. Unreachable demand is a
+# `found: false` entry specifically so the frontend never reconciles two lists;
+# an implementation that filtered them out would break a drawn node state.
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_convoy_count_equals_demand_node_count(dataset_id):
+    demand_ids = sorted(
+        n.id for n in api.get_registry().scenario(dataset_id).network.demand_nodes()
+    )
+    for plan in _naive(dataset_id):
+        assert sorted(c["dst"] for c in plan["convoys"]) == demand_ids
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_every_threat_picture_keeps_the_convoy_count(dataset_id):
+    # The case that would actually produce an unreachable destination: a threat
+    # picture that cuts one off. The convoy stays, carrying `found: false`.
+    scenario = api.get_registry().scenario(dataset_id)
+    demand_count = len(scenario.network.demand_nodes())
+    for name in scenario.threat_pictures:
+        for plan in _naive(dataset_id, threat=name):
+            assert len(plan["convoys"]) == demand_count, (
+                f"{name}: {demand_count} demand nodes, "
+                f"{len(plan['convoys'])} convoys"
+            )
+
+
+# Sources lists every supply node, not only violating ones. Filtering the idle
+# ones is the easy mistake and it is silent -- and the idle hub beside the
+# overdrawn one is half the Day 1 argument.
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_sources_lists_every_supply_node_not_only_violating_ones(dataset_id):
+    supply_ids = sorted(
+        n.id for n in api.get_registry().scenario(dataset_id).network.supply_nodes()
+    )
+    for plan in _naive(dataset_id):
+        assert sorted(s["id"] for s in plan["sources"]) == supply_ids
+
+
+def test_a_healthy_hub_survives_the_ledger_beside_an_overdrawn_one(tmp_path):
+    """Guards the guard above, which a theater of all-violating hubs would pass
+    vacuously: *unfiltered* only means something while some hub is within stock.
+
+    Built synthetically rather than read off a shipped theater. Asserting that
+    some real hub is overdrawn at lambda 0 would be a teaching number at the
+    HTTP boundary -- raise that hub's stock and the suite goes red here as well
+    as in `tests/test_naive.py`, and the second red teaches nothing. What is
+    pinned is the contrast, on a sand table built to contain it.
+    """
+    plans = _naive_from(tmp_path, _lopsided_scenario(), lambdas="0")
+
+    ledger = {s["id"]: s for s in plans[0]["sources"]}
+    assert ledger["OVERDRAWN"]["over"] and ledger["OVERDRAWN"]["overage"] == 6
+    assert not ledger["IDLE"]["over"], (
+        "the idle hub was filtered out of the ledger; standing beside the "
+        "overdrawn one is half of what Day 1 argues"
+    )
+    assert ledger["IDLE"]["dispatched"] == 0
+
+
+def test_unreachable_demand_is_a_found_false_convoy_a_browser_can_parse(tmp_path):
+    """The `found: false` branch, which no shipped theater reaches.
+
+    Every dataset in `data/` serves every destination under every threat
+    picture, so both halves of this are otherwise unchecked until a live class
+    hits them. A cut-off sand table is served instead.
+
+    Two claims. The convoy is *present* -- the count still equals the
+    demand-node count, so the frontend draws a third node state rather than
+    reconciling two lists. And its cost is `null`: the core says infinity,
+    which is the honest answer, but `Infinity` is not JSON and `JSON.parse`
+    throws on it, costing the browser the whole response rather than one cell.
+    Python's own decoder accepts `Infinity`, which is why `_naive_from` parses
+    the raw body strictly rather than calling `response.json()`.
+    """
+    plans = _naive_from(tmp_path, _cut_off_scenario(), lambdas="0")
+
+    convoys = {c["dst"]: c for c in plans[0]["convoys"]}
+    assert set(convoys) == {"D", "MAROONED"}
+    assert convoys["D"]["found"] and convoys["D"]["total_cost"] is not None
+    stranded = convoys["MAROONED"]
+    assert stranded["found"] is False
+    assert stranded["origin"] == "" and stranded["path"] == []
+    assert stranded["total_cost"] is None and stranded["total_effective"] is None
+    assert plans[0]["unserved"] == stranded["quantity"]
+
+
+def test_naive_is_documented_at_docs_with_the_same_lambda_parameter_as_sweep():
+    paths = client.app.openapi()["paths"]
+    naive_params = {p["name"]: p for p in paths["/naive"]["get"]["parameters"]}
+    sweep_params = {p["name"]: p for p in paths["/sweep"]["get"]["parameters"]}
+    assert set(naive_params) == set(sweep_params) == {"lambdas", "threat", "dataset"}
+    assert (
+        naive_params["lambdas"]["schema"]["default"]
+        == sweep_params["lambdas"]["schema"]["default"]
+    )
 
 
 # ---- the registry itself ----------------------------------------------------
@@ -570,3 +772,66 @@ def _minimal_scenario():
         },
         "threat_pictures": {},
     }
+
+
+def _cut_off_scenario():
+    """The sand table, plus a demand node no lane reaches."""
+    scenario = _minimal_scenario()
+    scenario["network"]["nodes"].append(
+        {"id": "MAROONED", "kind": "demand", "quantity": 3}
+    )
+    return scenario
+
+
+def _lopsided_scenario():
+    """A sand table whose cheap hub cannot cover what it is handed.
+
+    Both destinations prefer OVERDRAWN at cost 1 over IDLE at cost 9, so the
+    naive rule hands it 10 against a stock of 4 and leaves IDLE untouched --
+    the overdrawn hub beside the healthy one, in miniature and with no shipped
+    theater's numbers involved.
+    """
+    return {
+        "name": "Lopsided sand table",
+        "description": "Two hubs, one cheap and short of stock, used by the tests.",
+        "network": {
+            "nodes": [
+                {"id": "OVERDRAWN", "kind": "supply", "quantity": 4},
+                {"id": "IDLE", "kind": "supply", "quantity": 100},
+                {"id": "D1", "kind": "demand", "quantity": 5},
+                {"id": "D2", "kind": "demand", "quantity": 5},
+            ],
+            "edges": [
+                {"src": "OVERDRAWN", "dst": "D1", "cap": 100, "cost": 1},
+                {"src": "OVERDRAWN", "dst": "D2", "cap": 100, "cost": 1},
+                {"src": "IDLE", "dst": "D1", "cap": 100, "cost": 9},
+                {"src": "IDLE", "dst": "D2", "cap": 100, "cost": 9},
+            ],
+        },
+        "threat_pictures": {},
+    }
+
+
+def _naive_from(tmp_path, scenario, lambdas):
+    """GET /naive against a hand-built theater, parsed as a browser would.
+
+    The seam for the branches no shipped dataset reaches. `json.loads` with
+    `parse_constant` rather than `response.json()`: Python's decoder happily
+    accepts `Infinity`, so calling `.json()` would hide the one encoding
+    mistake that costs a browser the entire response.
+    """
+    path = tmp_path / "sandtable.json"
+    path.write_text(json.dumps(scenario), encoding="utf-8")
+    previous = api.use_registry(
+        build_registry(data_dir=str(tmp_path), default_path=str(path))
+    )
+    try:
+        response = client.get("/naive", params={"lambdas": lambdas})
+        assert response.status_code == 200, response.text
+        return json.loads(response.text, parse_constant=_reject_json_constant)
+    finally:
+        api.use_registry(previous)
+
+
+def _reject_json_constant(name):
+    raise AssertionError(f"the body carries {name}; JSON.parse throws on it")
