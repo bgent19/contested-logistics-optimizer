@@ -125,7 +125,8 @@ def cmd_naive(args) -> int:
          "convoys": [
             {"dst": c.dst, "origin": c.origin, "quantity": c.quantity,
              "path": c.path, "total_cost": c.total_cost,
-             "total_effective": c.total_effective, "found": c.found}
+             "total_effective": c.total_effective, "survival": c.survival,
+             "found": c.found}
             for c in plan.convoys
          ],
          "lanes": [
@@ -175,9 +176,25 @@ def cmd_naive(args) -> int:
    print("Notional because this plan cannot be executed: the lanes and hubs")
    print("above are oversubscribed, so nothing here is a price anyone can pay.")
    if not plan.risk_aversion:
-      print("Compare `clopt allocate --risk-aversion 0`: the feasible optimum")
-      print("costs 1250 against this 1080 on the sample theater. That gap is")
-      print("what buildability costs -- and it is the whole of Day 1.")
+      # Computed, never hardcoded: this prose prints under every dataset and
+      # every threat picture, and a memorized "1250" would be a lie in all
+      # but one of them.
+      feasible = solve_allocation(net, risk_aversion=0.0)
+      print(f"The feasible optimum (`clopt allocate --risk-aversion 0`) costs "
+            f"{feasible.transit_cost:.2f}.")
+      if feasible.fill_rate < 1.0:
+         # It is not undercutting the optimum, it is being compared against a
+         # plan that gave up on some demand. Say so rather than quote a gap
+         # that flatters the naive plan for the wrong reason.
+         print(f"But that plan only fills {feasible.fill_rate * 100:.1f}% of "
+               f"demand, so the two are not")
+         print("priced over the same delivery -- no honest gap to read here.")
+      else:
+         gap = feasible.transit_cost - plan.notional_cost
+         print(f"Both plans claim every unit of demand, so the {gap:.2f} the "
+               f"naive plan saves")
+         print("is bought entirely with capacity that does not exist. That gap")
+         print("is what buildability costs -- and it is the whole of Day 1.")
    else:
       # At lambda > 0 the naive plan is routing on cost + lambda*risk, so
       # its *raw* transit cost can exceed the feasible optimum's while it

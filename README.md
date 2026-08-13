@@ -49,7 +49,17 @@ buildability costs.
 
 (The comparison is a λ=0 one. Raise risk aversion and the naive plan buys
 expensive-but-safe air lanes, so its raw transit cost can pass the feasible
-optimum's while still undercutting it on the blended objective it minimized.)
+optimum's while still undercutting it on the blended objective it minimized.
+`clopt naive` computes the comparison from whichever theater you hand it, and
+declines to quote a gap when the feasible optimum cannot fill demand either.)
+
+At λ=50 the whole theater stampedes onto HUB-ALPHA, which is then 40 units
+overdrawn while HUB-BRAVO sits completely idle — the same rule, the same
+network, and the opposite hub in trouble. One honest footnote for the board:
+FOB-LIMA is a genuine **tie** at λ=50, costing 24.5 from either hub, and it
+goes to ALPHA only because ties break on `(effective_cost, origin_id)` and
+`HUB-ALPHA` sorts first. If a student asks why LIMA switched hubs, the true
+answer is that it didn't have to.
 
 This service treats the whole thing as a **capacitated min-cost flow** with a
 risk-blended objective, so capacity, multi-source/multi-sink allocation, and a

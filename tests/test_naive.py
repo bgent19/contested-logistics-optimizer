@@ -7,7 +7,6 @@ suite red in two places, and the second red is noise.
 The claims are ordered by how badly they want pinning, not by narrative order.
 """
 
-import glob
 import os
 
 import pytest
@@ -18,9 +17,9 @@ from clopt.routing import naive_plan
 from clopt.scenario import load_scenario
 from clopt.solver import solve_allocation
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(REPO_ROOT, "data")
-THEATER = os.path.join(DATA_DIR, "theater_sample.json")
+DATA = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+DATASETS = sorted(f for f in os.listdir(DATA) if f.endswith(".json"))
+THEATER = os.path.join(DATA, "theater_sample.json")
 
 
 @pytest.fixture
@@ -175,12 +174,9 @@ def test_exactly_saturated_lane_is_not_over(theater):
 
 # --- 5. Every shipped dataset plans without raising ------------------------
 
-@pytest.mark.parametrize(
-   "path", sorted(glob.glob(os.path.join(DATA_DIR, "*.json"))),
-   ids=lambda p: os.path.splitext(os.path.basename(p))[0],
-)
-def test_every_dataset_plans(path):
-   net = load_scenario(path).network
+@pytest.mark.parametrize("filename", DATASETS)
+def test_every_dataset_plans(filename):
+   net = load_scenario(os.path.join(DATA, filename)).network
    for lam in (0.0, 50.0):
       plan = naive_plan(net, risk_aversion=lam)
       assert len(plan.convoys) == len(net.demand_nodes())
@@ -256,6 +252,28 @@ def test_cli_prints_the_four_sections(capsys):
    # The idle hub appears in the ledger even though it violates nothing.
    assert "Source ledger" in out and "HUB-ALPHA" in out
    assert "Notional cost: 1080.00" in out
+   # The comparison is computed from the loaded network, not memorized, so it
+   # stays true under every dataset and threat picture.
+   assert "1250.00" in out
+
+
+def test_cli_gap_prose_is_computed_not_memorized(capsys):
+   """Under a threat picture the feasible optimum moves. The sample theater's
+   1250 must not follow it there."""
+   assert cli_main(["naive", "--data", THEATER, "--risk-aversion", "0",
+                    "--threat", "strait_mined"]) == 0
+   out = capsys.readouterr().out
+   assert "1250.00" not in out
+
+
+def test_cli_refuses_the_gap_when_the_optimum_cannot_fill_demand(capsys):
+   """`textbook_maxflow` tops out at 7 of 20 units. A cheaper feasible cost
+   there means "delivered less", not "the naive plan won", and quoting a gap
+   would flatter it for the wrong reason."""
+   path = os.path.join(DATA, "textbook_maxflow.json")
+   assert cli_main(["naive", "--data", path, "--risk-aversion", "0"]) == 0
+   out = capsys.readouterr().out
+   assert "no honest gap to read here" in out
 
 
 def test_cli_does_not_claim_the_raw_comparison_at_high_lambda(capsys):

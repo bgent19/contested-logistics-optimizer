@@ -165,10 +165,6 @@ class NaiveConvoy:
    survival: float
    found: bool = True
 
-   @property
-   def hops(self) -> int:
-      return max(0, len(self.path) - 1)
-
 
 @dataclass
 class LaneLoad:
