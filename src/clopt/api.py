@@ -84,6 +84,16 @@ class Leg(BaseModel):
    risk: float
 
 
+def _legs(res) -> List[Leg]:
+   """The moving legs of a solved allocation, in wire form.
+
+   Shared by /allocate and /sweep so the prefetched row and the one-lambda
+   call cannot drift into describing the same plan two different ways.
+   """
+   return [Leg(src=l.src, dst=l.dst, flow=l.flow, cost=l.cost, risk=l.risk)
+           for l in res.active_legs()]
+
+
 class AllocationResponse(BaseModel):
    risk_aversion: float
    delivered: float
@@ -105,10 +115,20 @@ class RouteResponse(BaseModel):
 
 
 class SweepRow(BaseModel):
+   """One lambda's optimum, scalars *and* plan.
+
+   The row carries the legs it describes rather than the scalars alone, so the
+   teaching frontend can prefetch the whole frontier and then answer a keypress
+   without a fetch. The cost, stated so it is not read as a regression: /sweep
+   is no longer a cheap summary call -- it is everything about the optimum at
+   each lambda, and a direct API user pays for the plans as well.
+   """
+
    risk_aversion: float
    fill_rate: float
    transit_cost: float
    risk_exposure: float
+   legs: List[Leg]
 
 
 class DatasetSummary(BaseModel):
@@ -159,8 +179,7 @@ def allocate(
       transit_cost=res.transit_cost,
       risk_exposure=res.risk_exposure,
       blended_cost=res.blended_cost,
-      legs=[Leg(src=l.src, dst=l.dst, flow=l.flow, cost=l.cost, risk=l.risk)
-            for l in res.active_legs()],
+      legs=_legs(res),
    )
 
 
@@ -190,7 +209,8 @@ def route(
 
 @app.get("/sweep", response_model=List[SweepRow])
 def sweep(
-   lambdas: str = Query("0,1,2,5,10,25,50,100", description="Comma-separated lambda values."),
+   lambdas: str = Query("0,1,2,5,10,25,50,100",
+                        description="Comma-separated lambda values; one row each, plan included."),
    threat: Optional[str] = Query(None),
    dataset: Optional[str] = DATASET_QUERY,
 ) -> List[SweepRow]:
@@ -201,7 +221,8 @@ def sweep(
    results = pareto_sweep(_net_for(dataset, threat), values)
    return [
       SweepRow(risk_aversion=r.risk_aversion, fill_rate=r.fill_rate,
-               transit_cost=r.transit_cost, risk_exposure=r.risk_exposure)
+               transit_cost=r.transit_cost, risk_exposure=r.risk_exposure,
+               legs=_legs(r))
       for r in results
    ]
 

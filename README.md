@@ -268,7 +268,7 @@ make api      # uvicorn clopt.api:app  ->  http://localhost:8000/docs
 | `GET /scenario` | theater summary and available threat pictures |
 | `GET /allocate?risk_aversion=&threat=` | full allocation plan with per-leg flow |
 | `GET /route?from=&to=&safest=&threat=` | single-convoy path |
-| `GET /sweep?lambdas=&threat=` | cost/risk frontier rows |
+| `GET /sweep?lambdas=&threat=` | cost/risk frontier rows, each with the plan's legs |
 | `GET /maxflow?threat=` | max throughput + min-cut certificate |
 | `GET /interdict?budget=&method=&threat=` | adversary's cheapest blockade |
 
