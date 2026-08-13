@@ -1,0 +1,25 @@
+{
+  "name": "Greedy trap (unit Day 4)",
+  "description": "A constructed counterexample for the heuristic-vs-exact lesson: the smallest network we could find on which the greedy budget interdictor is strictly worse than the exhaustive one. Baseline throughput is 140 (80 down s->A->D->t, 30 down s->B->C->t, 30 down s->C->t). With a budget of two lanes, exhaustive search removes C->t and D->t -- the only two lanes into t -- and drives throughput to 0. Greedy cannot see that pair: it opens with the most damaging single lane, s->A at 80, and is left with a network whose best remaining removal is worth only 30, stalling at 30. That gap is the sentence Day 4 is built on -- greedy fails when the best blockade isn't where the biggest single lane is. Nodes are named in Day 2's abstract register so this reads as a constructed instance rather than a theater; the theater cannot demonstrate this divergence and cannot be edited into demonstrating it. NOTE: the order of the edges array is load-bearing -- three lanes tie at damage 80 and greedy's tie break is first-in-file, so a reordering that puts D->t first lets greedy reach 0 too and erases the lesson. See test_trap_edge_order_preserves_the_divergence.",
+  "network": {
+    "nodes": [
+      { "id": "s", "kind": "supply", "quantity": 200, "label": "source", "x": 130, "y": 360 },
+      { "id": "A", "kind": "transit", "x": 380, "y": 200 },
+      { "id": "B", "kind": "transit", "x": 380, "y": 520 },
+      { "id": "C", "kind": "transit", "x": 640, "y": 520 },
+      { "id": "D", "kind": "transit", "x": 640, "y": 200 },
+      { "id": "t", "kind": "demand", "quantity": 200, "label": "sink", "x": 860, "y": 360 }
+    ],
+    "edges": [
+      { "src": "s", "dst": "A", "cap": 80, "cost": 1 },
+      { "src": "s", "dst": "B", "cap": 30, "cost": 1 },
+      { "src": "s", "dst": "C", "cap": 30, "cost": 1 },
+      { "src": "A", "dst": "D", "cap": 80, "cost": 1 },
+      { "src": "B", "dst": "C", "cap": 60, "cost": 1 },
+      { "src": "B", "dst": "D", "cap": 40, "cost": 1 },
+      { "src": "C", "dst": "t", "cap": 80, "cost": 1 },
+      { "src": "D", "dst": "t", "cap": 80, "cost": 1 }
+    ]
+  },
+  "threat_pictures": {}
+}

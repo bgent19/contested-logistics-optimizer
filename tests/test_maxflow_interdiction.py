@@ -5,6 +5,7 @@ and Day 3 result (min cut also 7), so a regression is a concrete wrong number
 against the published notes.
 """
 
+import json
 import os
 
 from clopt.maxflow import EdmondsKarp
@@ -135,3 +136,24 @@ def test_textbook_trace_demonstrates_cancellation():
 
     # Edmonds-Karp's non-decreasing path length, on screen rather than asserted.
     assert [len(s.path) - 1 for s in res.trace] == [3, 3, 5]
+
+
+def test_textbook_edge_order_is_the_cancelling_one():
+    """The ordering condition itself, named, so a reordering fails by name.
+
+    The test above already catches a reordering, but it fails as a wrong
+    bottleneck list, which reads like the solver regressed rather than like
+    the file was tidied. Half of the 5040 orderings collapse the trace to two
+    iterations and restore exactly the bug this dataset replaced; grouping the
+    lanes by source node -- the obvious tidy-up -- is one of them. This asserts
+    the two precedences that select the cancelling trace.
+    """
+    with open(TEXTBOOK, "r", encoding="utf-8") as fh:
+        order = [(e["src"], e["dst"]) for e in json.load(fh)["network"]["edges"]]
+
+    assert order.index(("s", "A")) < order.index(("s", "C")), (
+        "s->A must be listed before s->C, or iteration 1 takes the wrong path"
+    )
+    assert order.index(("A", "B")) < order.index(("A", "D")), (
+        "A->B must be listed before A->D, or nothing is ever cancelled"
+    )
