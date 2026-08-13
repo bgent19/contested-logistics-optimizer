@@ -40,6 +40,12 @@ class Node:
    quantity: float = 0.0
    label: str = ""
 
+   # Authored diagram position, in `viewBox` units. Drawing data that happens
+   # to be authored beside the model: the core carries it and never reads it.
+   # `None` means "unauthored" -- a layout is free to place the node itself.
+   x: Optional[float] = None
+   y: Optional[float] = None
+
    def __post_init__(self) -> None:
       if isinstance(self.kind, str):
          self.kind = NodeKind(self.kind)

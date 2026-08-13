@@ -53,3 +53,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+# Print the reason for every skip. A skipped test is a check that did not run,
+# and under `-q` alone it shows as a bare `s` -- which is how a dataset with no
+# authored coordinates would look exactly like a dataset that was verified.
+addopts = ["-rs"]

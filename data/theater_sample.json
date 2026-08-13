@@ -3,15 +3,15 @@
   "description": "A fictional island-resupply theater. Two rear logistics hubs must sustain three forward operating bases across contested sea lanes. A cheap chokepoint (STRAIT-3) is fast but dangerous; an airhead and longer ocean lanes are safe but costly and capacity-limited. All node designators and numbers are invented to illustrate the model.",
   "network": {
     "nodes": [
-      { "id": "HUB-ALPHA",  "kind": "supply",    "quantity": 120, "label": "Rear logistics hub (primary)" },
-      { "id": "HUB-BRAVO",  "kind": "supply",    "quantity": 60,  "label": "Forward port (secondary stock)" },
-      { "id": "LANE-J1",    "kind": "transit", "label": "Open-ocean lane junction" },
-      { "id": "LANE-J2",    "kind": "transit", "label": "Inner-sea lane junction" },
-      { "id": "STRAIT-3",   "kind": "transit", "label": "Contested strait chokepoint" },
-      { "id": "AIRHEAD-7",  "kind": "transit", "label": "Intermediate airhead" },
-      { "id": "FOB-KILO",   "kind": "demand",    "quantity": 70, "label": "Island base (high demand)" },
-      { "id": "FOB-LIMA",   "kind": "demand",    "quantity": 50, "label": "Island base (mid)" },
-      { "id": "FOB-MIKE",   "kind": "demand",    "quantity": 40, "label": "Most-forward base" }
+      { "id": "HUB-ALPHA",  "kind": "supply",    "quantity": 120, "label": "Rear logistics hub (primary)", "x": 110, "y": 250 },
+      { "id": "HUB-BRAVO",  "kind": "supply",    "quantity": 60,  "label": "Forward port (secondary stock)", "x": 110, "y": 540 },
+      { "id": "LANE-J1",    "kind": "transit", "label": "Open-ocean lane junction", "x": 360, "y": 190 },
+      { "id": "LANE-J2",    "kind": "transit", "label": "Inner-sea lane junction", "x": 360, "y": 590 },
+      { "id": "STRAIT-3",   "kind": "transit", "label": "Contested strait chokepoint", "x": 300, "y": 400 },
+      { "id": "AIRHEAD-7",  "kind": "transit", "label": "Intermediate airhead", "x": 600, "y": 120 },
+      { "id": "FOB-KILO",   "kind": "demand",    "quantity": 70, "label": "Island base (high demand)", "x": 830, "y": 270 },
+      { "id": "FOB-LIMA",   "kind": "demand",    "quantity": 50, "label": "Island base (mid)", "x": 830, "y": 450 },
+      { "id": "FOB-MIKE",   "kind": "demand",    "quantity": 40, "label": "Most-forward base", "x": 830, "y": 630 }
     ],
     "edges": [
       { "src": "HUB-ALPHA", "dst": "LANE-J1",   "cap": 120, "cost": 4, "risk": 0.05 },

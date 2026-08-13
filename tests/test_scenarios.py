@@ -11,15 +11,21 @@ third theater is covered the day the file lands rather than the day someone
 remembers to add it here.
 """
 
+import json
 import os
 
 import pytest
 
-from clopt.model import NodeKind
-from clopt.scenario import load_scenario
+from clopt.model import Network, Node, NodeKind
+from clopt.scenario import load_scenario, network_to_dict, save_scenario
 
 DATA = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 DATASETS = sorted(f for f in os.listdir(DATA) if f.endswith(".json"))
+
+
+def _read(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        return fh.read()
 
 
 def test_data_directory_is_not_empty():
@@ -42,6 +48,62 @@ def test_shipped_scenario_loads(filename):
         assert isinstance(node.kind, NodeKind), (
             f"{filename}: node {node.id} kind did not coerce to NodeKind"
         )
+
+
+@pytest.mark.parametrize("filename", DATASETS)
+def test_authored_coordinates_survive_a_round_trip(filename, tmp_path):
+    """A load -> save -> load cycle must not quietly drop authored positions.
+
+    The theater's coordinates are the output of a long layout search that
+    nobody is going to redo by eye, and a serialiser that forgets to write
+    them back raises nothing -- the file just comes out flat. So assert the
+    cycle rather than the reader alone.
+    """
+    source = os.path.join(DATA, filename)
+    on_disk = json.loads(_read(source))
+    before = {n["id"]: (n.get("x"), n.get("y")) for n in on_disk["network"]["nodes"]}
+    authored = {
+        node_id: position
+        for node_id, position in before.items()
+        if position != (None, None)
+    }
+    if not authored:
+        # Loudly, not vacuously: an un-authored dataset has nothing to
+        # preserve, and a silent pass here would look like verification.
+        pytest.skip(f"{filename}: no node carries a coordinate to round-trip")
+
+    out = tmp_path / filename
+    save_scenario(load_scenario(source), str(out))
+    reloaded = load_scenario(str(out))
+
+    for node_id, position in authored.items():
+        node = reloaded.network.nodes[node_id]
+        assert (node.x, node.y) == position, (
+            f"{filename}: node {node_id} moved {position} -> {(node.x, node.y)} "
+            f"across a save/load cycle"
+        )
+
+    # Untouched means untouched, on disk as well as in memory: no scaling, no
+    # flipping, and no int -> float drift that would rewrite every coordinate.
+    # Unauthored nodes are covered too -- they must come back out as null.
+    written = json.loads(_read(str(out)))
+    for node in written["network"]["nodes"]:
+        assert (node["x"], node["y"]) == before[node["id"]], (
+            f"{filename}: node {node['id']} coordinates were transformed on write"
+        )
+
+
+def test_unauthored_nodes_serialise_as_null():
+    # Both shipped datasets are fully authored, so the round-trip test above
+    # never reaches this branch. A layout needs to be able to tell "placed at
+    # 0" apart from "not placed", which means the key is present and null --
+    # not absent, and not defaulted to a number.
+    net = Network()
+    net.add_node(Node(id="UNPLACED", kind="transit"))
+
+    node = network_to_dict(net)["nodes"][0]
+
+    assert node["x"] is None and node["y"] is None
 
 
 @pytest.mark.parametrize("filename", DATASETS)
