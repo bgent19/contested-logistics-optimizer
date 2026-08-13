@@ -32,6 +32,35 @@ dangerous one (a mined strait, a covered chokepoint). It also ignores
 feasible plan once volume matters. And it has nothing to say when a node is
 struck mid-campaign.
 
+You can run the collapse rather than take it on faith:
+
+```bash
+clopt naive    --data data/theater_sample.json --risk-aversion 0   # notional 1080
+clopt allocate --data data/theater_sample.json --risk-aversion 0   # feasible  1250
+```
+
+`naive` serves each base from its own globally cheapest hub, superimposes the
+routes, and counts what breaks: **HUB-BRAVO → LANE-J2** carries 90 down a
+60-unit lane, and HUB-BRAVO is asked to dispatch 90 units of the 60 it holds
+while HUB-ALPHA sits on 50 spare. The plan prices at **1080** against the
+feasible optimum's **1250** at identical full fill — it is cheaper precisely
+because it is buying capacity that does not exist. That 170 is what
+buildability costs.
+
+(The comparison is a λ=0 one. Raise risk aversion and the naive plan buys
+expensive-but-safe air lanes, so its raw transit cost can pass the feasible
+optimum's while still undercutting it on the blended objective it minimized.
+`clopt naive` computes the comparison from whichever theater you hand it, and
+declines to quote a gap when the feasible optimum cannot fill demand either.)
+
+At λ=50 the whole theater stampedes onto HUB-ALPHA, which is then 40 units
+overdrawn while HUB-BRAVO sits completely idle — the same rule, the same
+network, and the opposite hub in trouble. One honest footnote for the board:
+FOB-LIMA is a genuine **tie** at λ=50, costing 24.5 from either hub, and it
+goes to ALPHA only because ties break on `(effective_cost, origin_id)` and
+`HUB-ALPHA` sorts first. If a student asks why LIMA switched hubs, the true
+answer is that it didn't have to.
+
 This service treats the whole thing as a **capacitated min-cost flow** with a
 risk-blended objective, so capacity, multi-source/multi-sink allocation, and a
 tunable risk posture all fall out of one model.
@@ -166,7 +195,7 @@ Each day's idea has a concrete home in the code you can run and read.
 
 | unit | idea | in this repo |
 |------|------|--------------|
-| **Day 1** | shortest path is the wrong model once capacity binds | `routing.py` (`cheapest_path` / `safest_path`) is the "first instinct"; the capacity-limited sample theater shows why it collapses |
+| **Day 1** | shortest path is the wrong model once capacity binds | `routing.py`: `cheapest_path` / `safest_path` are the "first instinct", and `naive_plan` builds a whole plan out of them so the collapse is computed, not asserted — `clopt naive` prints the oversubscribed lanes and the overdrawn hub |
 | **Day 2** | Ford–Fulkerson / **Edmonds–Karp** max-flow on a residual graph | `maxflow.py` (BFS augmenting paths, explicit residual arcs); reproduces the unit's worked example exactly: `clopt maxflow --data data/textbook_maxflow.json` returns **7** |
 | **Day 3** | **Max-Flow Min-Cut**: the cut is a certificate of optimality | `throughput.py` extracts the witness cut; `clopt maxflow` prints the lanes that prove no plan moves more |
 | **Day 4** | **interdiction** - polynomial min-cut vs. NP-hard budget version | `interdiction.py`: `min_cut_interdiction` (polynomial) and `budget_interdiction` (exhaustive optimum *and* greedy heuristic, with the combinatorial subset count surfaced) |
@@ -238,6 +267,10 @@ clopt info     --data data/theater_sample.json
 # Theater-wide allocation (add --json for machine-readable output)
 clopt allocate --data data/theater_sample.json --risk-aversion 25
 clopt allocate --data data/theater_sample.json --threat strait_mined
+
+# Day 1: the naive plan and everything it oversubscribes
+clopt naive    --data data/theater_sample.json --risk-aversion 0
+clopt naive    --data data/theater_sample.json --lambda 50    # the stampede onto ALPHA
 
 # Single-convoy routing
 clopt route    --data data/theater_sample.json --from HUB-ALPHA --to FOB-KILO
