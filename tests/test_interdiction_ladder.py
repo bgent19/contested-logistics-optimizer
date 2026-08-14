@@ -31,6 +31,7 @@ from clopt.scenario import load_scenario
 DATA = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 TRAP = os.path.join(DATA, "greedy_trap.json")
 THEATER = os.path.join(DATA, "theater_sample.json")
+TEXTBOOK = os.path.join(DATA, "textbook_maxflow.json")
 
 
 def _net(path):
@@ -174,13 +175,17 @@ def test_no_blockade_is_ever_drawn_under_two_values_of_k():
         assert len(set(pictures)) == len(pictures)
 
 
-def test_a_rung_names_the_budgets_it_speaks_for():
-    # `k_through` is `k` on a rung that was not collapsed, which is every rung
-    # of every shipped dataset. It exists so a collapsed rung cannot silently
-    # swallow a budget value.
-    for path in (TRAP, THEATER):
+def test_no_shipped_ladder_actually_collapses_a_rung():
+    """`k_through == k` everywhere, which is the collapse guard reporting idle.
+
+    Asserted rather than assumed: it is the evidence for the claim in
+    `interdiction_ladder` that the guard is quiet on a live network, and it is
+    what would fail first if a change to the stop rule started producing
+    repeated pictures for the guard to swallow.
+    """
+    for path in (TRAP, THEATER, TEXTBOOK):
         for rung in interdiction_ladder(_net(path)).rungs:
-            assert rung.k_through >= rung.k
+            assert rung.k_through == rung.k
 
 
 def test_the_collapse_test_is_the_removed_set_not_the_residual():
@@ -200,17 +205,33 @@ def test_the_collapse_test_is_the_removed_set_not_the_residual():
 
 
 # ---- searched and skipped ---------------------------------------------------
-def test_greedy_reports_the_work_greedy_did():
-    """Greedy's count is its own, and it is far below the optimum's.
+def test_greedy_reports_the_work_greedy_did_not_the_space():
+    """Greedy's count is its own, and it is well short of the whole space.
 
     Reporting the exhaustive subset count on a greedy result is a false claim
-    about work greedy never did -- and it would erase the one number Day 4
-    wants on screen, which is how much of the space greedy declines to look at.
+    about work greedy never did. What is asserted is that greedy's count is its
+    own and that it leaves most of the space untouched -- *not* that greedy
+    always searches less than the optimum, which is untrue: the optimum stops
+    the moment it severs the network, and on `textbook_maxflow` at k=2 it
+    finishes in 9 evaluations to greedy's 13.
     """
     rung = {r.k: r for r in interdiction_ladder(_net(TRAP)).rungs}[3]
 
-    assert rung.greedy.searched < rung.exhaustive.searched
+    assert rung.greedy.searched < rung.subsets_total
     assert rung.greedy.skipped > 0
+    assert rung.greedy.searched != rung.exhaustive.searched
+
+
+def test_the_counts_do_not_rank_the_two_methods():
+    """The inversion, pinned, so it is not later mistaken for a regression.
+
+    An early-breaking optimum can outrun greedy on a small instance. The counts
+    describe work done; the Day 4 number is how fast `subsets_total` grows.
+    """
+    by_k = {r.k: r for r in interdiction_ladder(_net(TEXTBOOK)).rungs}
+
+    assert by_k[2].exhaustive.searched == 9
+    assert by_k[2].greedy.searched == 13
 
 
 def test_searched_and_skipped_account_for_the_whole_space():

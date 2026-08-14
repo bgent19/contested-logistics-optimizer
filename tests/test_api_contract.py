@@ -689,6 +689,11 @@ def test_naive_is_documented_at_docs_with_the_same_lambda_parameter_as_sweep():
 TRAP_ID = "greedy_trap"
 
 
+def _lanes(track):
+    """A track's removed lanes as a set, so order is not read as difference."""
+    return {(lane["src"], lane["dst"]) for lane in track["removed"]}
+
+
 def _ladder(dataset=None, **params):
     if dataset is not None:
         params["dataset"] = dataset
@@ -794,9 +799,12 @@ def test_counts_are_labelled_searched_and_skipped(dataset_id):
             assert track["searched"] + track["skipped"] == rung["subsets_total"]
 
 
-def test_greedy_reports_less_work_than_the_optimum():
+def test_greedy_leaves_most_of_the_space_untouched():
+    # Not "greedy searches less than the optimum" -- the optimum stops the
+    # moment it severs the network and can finish first on a small instance.
+    # What the wire must carry is greedy's own count against the space.
     by_k = {rung["k"]: rung for rung in _ladder(TRAP_ID)["rungs"]}
-    assert by_k[3]["greedy"]["searched"] < by_k[3]["exhaustive"]["searched"]
+    assert by_k[3]["greedy"]["searched"] < by_k[3]["subsets_total"]
     assert by_k[3]["greedy"]["skipped"] > 0
 
 
@@ -833,11 +841,6 @@ def test_min_cut_mode_is_unchanged_by_the_ladder():
         "mode", "baseline_throughput", "cut_capacity", "cut_lanes",
     }
     assert body["mode"] == "min_cut"
-
-
-def _lanes(track):
-    """A track's removed lanes as a set, so order is not read as difference."""
-    return {(lane["src"], lane["dst"]) for lane in track["removed"]}
 
 
 # ---- the registry itself ----------------------------------------------------

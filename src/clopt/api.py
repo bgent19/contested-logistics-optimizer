@@ -26,7 +26,7 @@ picture to a fresh copy, so requests never leak state.
 from  __future__ import annotations
 
 import math
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
@@ -392,6 +392,48 @@ def _naive_plan_out(plan: NaivePlan) -> NaivePlanRow:
    )
 
 
+# The /interdict helpers below hand back plain dicts rather than the Pydantic
+# models every other `_*_out` in this module returns. /interdict answers in
+# three different shapes off one path -- min-cut, single-k, ladder -- and a
+# `response_model` can only describe one of them; a union would start filtering
+# the single-k shape the CLI is pinned to. So this endpoint hand-builds its
+# wire form, and these helpers are where that form is declared once.
+def _removed_lanes(removed: List[Tuple[str, str]]) -> List[dict]:
+   """A blockade's lanes in wire form.
+
+   Shared by the single-k response and the ladder's tracks so the two cannot
+   drift into describing the same removal two different ways -- the same
+   reason `_legs` is shared by /allocate and /sweep.
+   """
+   return [{"src": src, "dst": dst} for src, dst in removed]
+
+
+def _track_out(track: InterdictionTrack) -> dict:
+   return {
+      "method": track.method,
+      "removed": _removed_lanes(track.removed),
+      "residual_throughput": track.residual_throughput,
+      # `searched` and `skipped`, never "subsets considered". The space's size
+      # is the rung's `subsets_total`, and attaching that number to a greedy
+      # track claims work greedy never did. These two report evaluations
+      # actually performed and the remainder of the space, per method. See
+      # `interdiction.BudgetInterdiction`.
+      "searched": track.searched,
+      "skipped": track.skipped,
+   }
+
+
+def _rung_out(rung: LadderRung) -> dict:
+   return {
+      "k": rung.k,
+      "k_through": rung.k_through,
+      "exhaustive": _track_out(rung.exhaustive),
+      "greedy": _track_out(rung.greedy),
+      "subsets_total": rung.subsets_total,
+      "diverges": rung.diverges,
+   }
+
+
 def _threat_picture_out(sc: Scenario, name: str) -> ThreatPictureOut:
    return ThreatPictureOut(
       disruptions=[_disruption_out(d) for d in sc.threat_pictures[name]],
@@ -541,31 +583,6 @@ def maxflow(
    }
 
 
-def _track_out(track: InterdictionTrack) -> dict:
-   return {
-      "method": track.method,
-      "removed": [{"src": s, "dst": d} for s, d in track.removed],
-      "residual_throughput": track.residual_throughput,
-      # `searched` and `skipped`, never "subsets considered". The space's size
-      # is the rung's `subsets_total`; saying a greedy track "considered" it is
-      # a claim about work greedy declined to do, and the declining is the
-      # lesson. See `interdiction.BudgetInterdiction`.
-      "searched": track.searched,
-      "skipped": track.skipped,
-   }
-
-
-def _rung_out(rung: LadderRung) -> dict:
-   return {
-      "k": rung.k,
-      "k_through": rung.k_through,
-      "exhaustive": _track_out(rung.exhaustive),
-      "greedy": _track_out(rung.greedy),
-      "subsets_total": rung.subsets_total,
-      "diverges": rung.diverges,
-   }
-
-
 @app.get("/interdict")
 def interdict(
    budget: Optional[int] = Query(None, ge=1,
@@ -574,7 +591,8 @@ def interdict(
    method: str = Query("auto", pattern="^(auto|exhaustive|greedy)$"),
    ladder: bool = Query(False,
                         description="Walk k=1.. with both methods at every rung "
-                                    "(Day 4). Ignores `method`; see below."),
+                                    "(Day 4). Runs both methods, so passing "
+                                    "`method` alongside it is a 400."),
    threat: Optional[str] = Query(None),
    dataset: Optional[str] = DATASET_QUERY,
 ) -> dict:
@@ -629,7 +647,7 @@ def interdict(
       "budget": res.budget,
       "baseline_throughput": res.baseline_throughput,
       "residual_throughput": res.residual_throughput,
-      "removed": [{"src": s, "dst": d} for s, d in res.removed],
+      "removed": _removed_lanes(res.removed),
       "subsets_considered": res.subsets_considered,
       "min_cut_capacity": res.min_cut_capacity,
    }

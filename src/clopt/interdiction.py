@@ -31,6 +31,12 @@ from typing import List, Tuple
 from .model import Edge, Network
 from .throughput import CutLane, max_flow_min_cut
 
+# Throughputs are floats out of a max-flow solve, so "reached zero" and "strictly
+# improved" are comparisons against a tolerance rather than against 0. One name
+# for it, because a ladder that stops at a different epsilon than the search that
+# feeds it would run a rung too far or one too few.
+_EPS = 1e-9
+
 
 @dataclass
 class MinCutInterdiction:
@@ -58,16 +64,22 @@ class BudgetInterdiction:
    subsets_considered: int              # the whole space: C(m, <=budget), searched or not
    min_cut_capacity: float              # reference: capacity-weighted min cut
 
-   # How the search actually spent itself. `subsets_considered` is the size of
+   # How this search actually spent itself. `subsets_considered` is the size of
    # the space an *optimal* search of this budget must reckon with; it is the
    # denominator, not a claim about either method's work. Reporting it as
    # greedy's own count -- which this module did until the ladder needed the
-   # truth -- says greedy examined C(m, <=k) subsets, when the point of greedy
-   # is that it examines a few dozen singletons and declines to look at the
-   # rest. The pair below is the honest split, and it is what Day 4 puts on
-   # screen: `searched` is evaluations actually performed, `skipped` is the
-   # remainder of the space. Every evaluation either method makes is a distinct
-   # subset of size <= budget, so the two always sum to `subsets_considered`.
+   # truth -- asserts that greedy examined C(m, <=k) subsets, which it did not.
+   # `searched` is evaluations actually performed and `skipped` is the rest of
+   # the space. Every evaluation either method makes is a distinct subset of
+   # size <= budget, so the two always sum to `subsets_considered`.
+   #
+   # They report work done; they do not rank the two methods. The exhaustive
+   # search stops the moment it severs the network, so on a small enough
+   # instance it can finish in fewer evaluations than greedy -- on
+   # `textbook_maxflow` at k=2 the optimum searches 9 and greedy searches 13.
+   # That is not a defect in the counts; it is what an early break looks like.
+   # The number that carries the Day 4 lesson is the denominator's growth, not
+   # either method's constant factor.
    searched: int = 0
    skipped: int = 0
 
@@ -111,12 +123,12 @@ def budget_interdiction(
          for combo in combinations(candidates, r):
                resid = _throughput_without(net, combo)
                searched += 1
-               if resid < best_residual - 1e-9:
+               if resid < best_residual - _EPS:
                   best_residual = resid
                   best_combo = combo
-                  if best_residual <= 1e-9:
+                  if best_residual <= _EPS:
                      break
-         if best_residual <= 1e-9:
+         if best_residual <= _EPS:
                break
       removed = [(net.edges[i].src, net.edges[i].dst) for i in best_combo]
       return BudgetInterdiction(
@@ -155,15 +167,15 @@ def budget_interdiction(
          resid = max_flow_min_cut(work).value
          searched += 1
          work.edges[i].cap = saved
-         if resid < best_resid - 1e-9:
+         if resid < best_resid - _EPS:
                best_resid = resid
                best_i = i
-      if best_i is None or best_resid >= current - 1e-9:
+      if best_i is None or best_resid >= current - _EPS:
          break  # no further improvement
       work.edges[best_i].cap = 0.0
       chosen.append(best_i)
       remaining.discard(best_i)
-      if best_resid <= 1e-9:
+      if best_resid <= _EPS:
          break
    removed = [(net.edges[i].src, net.edges[i].dst) for i in chosen]
    return BudgetInterdiction(
@@ -186,8 +198,6 @@ def budget_interdiction(
 # how long Day 4 runs in the browser, and turns the identical-rung rule into
 # behaviour no test can reach. It also costs 2 x K x datasets requests at boot
 # where this costs one per dataset.
-
-_ZERO = 1e-9
 
 
 @dataclass
@@ -317,8 +327,8 @@ def interdiction_ladder(
       else:
          ladder.rungs.append(rung)
 
-      if (exhaustive.residual_throughput <= _ZERO
-            and greedy.residual_throughput <= _ZERO):
+      if (exhaustive.residual_throughput <= _EPS
+            and greedy.residual_throughput <= _EPS):
          ladder.terminated = True
          break
 
