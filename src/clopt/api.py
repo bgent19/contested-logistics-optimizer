@@ -28,7 +28,7 @@ from  __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.staticfiles import StaticFiles
@@ -43,7 +43,10 @@ from .routing import (
 from .scenario import Scenario
 from .solver import AllocationResult, solve_allocation, pareto_sweep
 from .throughput import max_flow_min_cut
-from .interdiction import budget_interdiction, min_cut_interdiction
+from .interdiction import (
+   InterdictionTrack, LadderRung,
+   budget_interdiction, interdiction_ladder, min_cut_interdiction,
+)
 
 app = FastAPI(
    title="Contested-Logistics Routing Optimizer",
@@ -392,6 +395,48 @@ def _naive_plan_out(plan: NaivePlan) -> NaivePlanRow:
    )
 
 
+# The /interdict helpers below hand back plain dicts rather than the Pydantic
+# models every other `_*_out` in this module returns. /interdict answers in
+# three different shapes off one path -- min-cut, single-k, ladder -- and a
+# `response_model` can only describe one of them; a union would start filtering
+# the single-k shape the CLI is pinned to. So this endpoint hand-builds its
+# wire form, and these helpers are where that form is declared once.
+def _removed_lanes(removed: List[Tuple[str, str]]) -> List[dict]:
+   """A blockade's lanes in wire form.
+
+   Shared by the single-k response and the ladder's tracks so the two cannot
+   drift into describing the same removal two different ways -- the same
+   reason `_legs` is shared by /allocate and /sweep.
+   """
+   return [{"src": src, "dst": dst} for src, dst in removed]
+
+
+def _track_out(track: InterdictionTrack) -> dict:
+   return {
+      "method": track.method,
+      "removed": _removed_lanes(track.removed),
+      "residual_throughput": track.residual_throughput,
+      # `searched` and `skipped`, never "subsets considered". The space's size
+      # is the rung's `subsets_total`, and attaching that number to a greedy
+      # track claims work greedy never did. These two report evaluations
+      # actually performed and the remainder of the space, per method. See
+      # `interdiction.BudgetInterdiction`.
+      "searched": track.searched,
+      "skipped": track.skipped,
+   }
+
+
+def _rung_out(rung: LadderRung) -> dict:
+   return {
+      "k": rung.k,
+      "k_through": rung.k_through,
+      "exhaustive": _track_out(rung.exhaustive),
+      "greedy": _track_out(rung.greedy),
+      "subsets_total": rung.subsets_total,
+      "diverges": rung.diverges,
+   }
+
+
 def _threat_picture_out(sc: Scenario, name: str) -> ThreatPictureOut:
    return ThreatPictureOut(
       disruptions=[_disruption_out(d) for d in sc.threat_pictures[name]],
@@ -544,12 +589,51 @@ def maxflow(
 @app.get("/interdict")
 def interdict(
    budget: Optional[int] = Query(None, ge=1,
-                                 description="Max lanes to remove; omit for min-cut interdiction."),
+                                 description="Max lanes to remove; omit for min-cut interdiction. "
+                                             "In ladder mode, the ceiling on k."),
    method: str = Query("auto", pattern="^(auto|exhaustive|greedy)$"),
+   ladder: bool = Query(False,
+                        description="Walk k=1.. with both methods at every rung "
+                                    "(Day 4). Runs both methods, so passing "
+                                    "`method` alongside it is a 400."),
    threat: Optional[str] = Query(None),
    dataset: Optional[str] = DATASET_QUERY,
 ) -> dict:
+   """Three modes, and the third is the teaching one.
+
+   No `budget`: min-cut interdiction. With `budget`: one search at one k, the
+   shape the CLI prints -- unchanged, and it stays unchanged. With
+   `ladder=true`: rungs k=1.. carrying *both* methods, terminating where both
+   reach zero, each rung flagged `diverges` by the server.
+
+   The ladder is one call per dataset rather than the 2 x K x datasets the
+   frontend would otherwise issue at boot, and -- the reason it lives on the
+   server at all -- termination and the identical-rung collapse become facts a
+   test can pin instead of logic in a render pass.
+   """
    net = _net_for(dataset, threat)
+   if ladder:
+      if method != "auto":
+         # Not ignored: a ladder runs both methods by definition, so there is
+         # nothing for `method` to select, and silently accepting it would let
+         # a caller believe it had asked for a one-method ladder and got one.
+         raise HTTPException(
+            status_code=400,
+            detail="ladder mode runs both methods; drop the `method` parameter.",
+         )
+      # `budget` is the ceiling here, not the answer. Omitted, the core's
+      # default guard applies and the data decides where the ladder stops.
+      kwargs = {} if budget is None else {"max_budget": budget}
+      result = interdiction_ladder(net, **kwargs)
+      return {
+         "mode": "ladder",
+         "baseline_throughput": result.baseline_throughput,
+         "min_cut_capacity": result.min_cut_capacity,
+         # False when the ceiling cut the ladder short: a truncated ladder must
+         # not be read as "and then the network was severed".
+         "terminated": result.terminated,
+         "rungs": [_rung_out(r) for r in result.rungs],
+      }
    if budget is None:
       inter = min_cut_interdiction(net)
       return {
@@ -566,7 +650,7 @@ def interdict(
       "budget": res.budget,
       "baseline_throughput": res.baseline_throughput,
       "residual_throughput": res.residual_throughput,
-      "removed": [{"src": s, "dst": d} for s, d in res.removed],
+      "removed": _removed_lanes(res.removed),
       "subsets_considered": res.subsets_considered,
       "min_cut_capacity": res.min_cut_capacity,
    }

@@ -681,6 +681,168 @@ def test_naive_is_documented_at_docs_with_the_same_lambda_parameter_as_sweep():
     )
 
 
+# ---- the interdiction ladder ------------------------------------------------
+# Day 4 on the wire. What is pinned here is what the frontend must not be left
+# to work out for itself: where the ladder ends, whether a rung's two tracks
+# parted ways, and that the first rung never does. The core's own tests own the
+# numbers; these own the contract.
+TRAP_ID = "greedy_trap"
+
+
+def _lanes(track):
+    """A track's removed lanes as a set, so order is not read as difference."""
+    return {(lane["src"], lane["dst"]) for lane in track["removed"]}
+
+
+def _ladder(dataset=None, **params):
+    if dataset is not None:
+        params["dataset"] = dataset
+    response = client.get("/interdict", params={"ladder": "true", **params})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_ladder_mode_is_opt_in_and_labels_itself():
+    assert _ladder()["mode"] == "ladder"
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_every_rung_carries_both_tracks_on_every_dataset(dataset_id):
+    # Two tracks always, including where they agree: a rung with one track
+    # filled in reads as "greedy wasn't run", which is the failure the ladder
+    # exists to prevent.
+    body = _ladder(dataset_id)
+    assert body["rungs"]
+    for rung in body["rungs"]:
+        assert rung["exhaustive"]["method"] == "exhaustive"
+        assert rung["greedy"]["method"] == "greedy"
+        for track in (rung["exhaustive"], rung["greedy"]):
+            assert "removed" in track and "residual_throughput" in track
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_the_ladder_ends_where_both_tracks_reach_zero(dataset_id):
+    body = _ladder(dataset_id)
+    last = body["rungs"][-1]
+
+    assert body["terminated"] is True
+    assert last["exhaustive"]["residual_throughput"] == 0
+    assert last["greedy"]["residual_throughput"] == 0
+    # Derived from the data, not a hard-coded K: the last rung is the *first*
+    # k at which both tracks read zero.
+    for rung in body["rungs"][:-1]:
+        assert not (
+            rung["exhaustive"]["residual_throughput"] == 0
+            and rung["greedy"]["residual_throughput"] == 0
+        )
+
+
+def test_termination_is_set_by_the_worse_method():
+    # The trap's exhaustive track is done at k=2. The ladder runs to k=3
+    # because greedy is not -- and k=3 is Day 4's punchline.
+    by_k = {rung["k"]: rung for rung in _ladder(TRAP_ID)["rungs"]}
+
+    assert sorted(by_k) == [1, 2, 3]
+    assert by_k[2]["exhaustive"]["residual_throughput"] == 0
+    assert by_k[2]["greedy"]["residual_throughput"] > 0
+    assert len(by_k[3]["greedy"]["removed"]) == 3
+    assert len(by_k[3]["exhaustive"]["removed"]) == 2
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_the_first_rung_never_diverges(dataset_id):
+    # Greedy's first iteration *is* the exhaustive search over singletons, so
+    # k=1 agreeing is an invariant of the two searches rather than a fact
+    # about any dataset. A divergence here means one of them is wrong.
+    first = _ladder(dataset_id)["rungs"][0]
+
+    assert first["k"] == 1
+    assert first["diverges"] is False
+    assert _lanes(first["exhaustive"]) == _lanes(first["greedy"])
+
+
+def test_the_diverges_flag_is_server_computed_and_reads_the_removed_set():
+    """k=3 on the trap: both tracks read zero, and it is still a divergence.
+
+    The flag compares removed sets, so it catches the rung where greedy and
+    the optimum arrive at the same number by different lanes -- the whole
+    lesson. A frontend comparing residuals would call that rung agreement.
+    """
+    by_k = {rung["k"]: rung for rung in _ladder(TRAP_ID)["rungs"]}
+
+    assert [by_k[k]["diverges"] for k in (1, 2, 3)] == [False, True, True]
+    assert (
+        by_k[3]["exhaustive"]["residual_throughput"]
+        == by_k[3]["greedy"]["residual_throughput"]
+    )
+    assert _lanes(by_k[3]["exhaustive"]) != _lanes(by_k[3]["greedy"])
+
+
+def test_an_agreeing_dataset_states_its_agreement():
+    # `140 / 140`, `60 / 60`, `0 / 0` -- both numbers on every rung, and the
+    # flag saying outright that they match, rather than one number and a blank.
+    for rung in _ladder("theater_sample")["rungs"]:
+        assert rung["diverges"] is False
+        assert (
+            rung["exhaustive"]["residual_throughput"]
+            == rung["greedy"]["residual_throughput"]
+        )
+
+
+@pytest.mark.parametrize("dataset_id", DATASET_IDS)
+def test_counts_are_labelled_searched_and_skipped(dataset_id):
+    # Not "subsets considered": that number is the size of the space, and
+    # attaching it to a greedy result claims work greedy did not do.
+    for rung in _ladder(dataset_id)["rungs"]:
+        for track in (rung["exhaustive"], rung["greedy"]):
+            assert "subsets_considered" not in track
+            assert track["searched"] + track["skipped"] == rung["subsets_total"]
+
+
+def test_greedy_leaves_most_of_the_space_untouched():
+    # Not "greedy searches less than the optimum" -- the optimum stops the
+    # moment it severs the network and can finish first on a small instance.
+    # What the wire must carry is greedy's own count against the space.
+    by_k = {rung["k"]: rung for rung in _ladder(TRAP_ID)["rungs"]}
+    assert by_k[3]["greedy"]["searched"] < by_k[3]["subsets_total"]
+    assert by_k[3]["greedy"]["skipped"] > 0
+
+
+def test_ladder_mode_refuses_a_method_rather_than_ignoring_it():
+    # Ladder mode runs both methods by definition, so `method` has nothing to
+    # select. Accepting and ignoring it would let a caller believe it asked
+    # for a greedy-only ladder and got one.
+    response = client.get("/interdict", params={"ladder": "true", "method": "greedy"})
+    assert response.status_code == 400
+    assert "method" in response.json()["detail"]
+
+
+def test_a_ceiling_below_the_answer_truncates_and_says_so():
+    body = _ladder(TRAP_ID, budget=1)
+
+    assert body["terminated"] is False
+    assert [rung["k"] for rung in body["rungs"]] == [1]
+
+
+def test_the_single_k_shape_is_unchanged_by_the_ladder():
+    """The CLI's response, key for key. Ladder mode is additive or it is a break."""
+    body = client.get("/interdict", params={"budget": 2}).json()
+
+    assert set(body) == {
+        "mode", "method", "budget", "baseline_throughput", "residual_throughput",
+        "removed", "subsets_considered", "min_cut_capacity",
+    }
+    assert body["mode"] == "budget"
+
+
+def test_min_cut_mode_is_unchanged_by_the_ladder():
+    body = client.get("/interdict").json()
+    assert set(body) == {
+        "mode", "baseline_throughput", "cut_capacity", "cut_lanes",
+    }
+    assert body["mode"] == "min_cut"
+
+
 # ---- the registry itself ----------------------------------------------------
 def test_registry_scans_the_data_directory_eagerly(tmp_path):
     # Every file is in memory before anything asks for it. Deleting the file
