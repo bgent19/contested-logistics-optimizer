@@ -12,3 +12,8 @@ venv/
 htmlcov/
 .DS_Store
 .vscode/
+
+# Claude Code's local state: per-session settings and the scratch worktrees it
+# creates under .claude/worktrees/. Local tooling, not repo configuration --
+# nothing here changes how the optimizer builds, tests or serves.
+.claude/
