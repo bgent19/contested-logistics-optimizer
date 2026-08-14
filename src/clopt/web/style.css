@@ -64,6 +64,13 @@
   --casing:             #07090d;
   --casing-w:           14;
 
+  /* Transient emphasis: the lane a ledger row was clicked on, and whatever the
+   * current beat is pointing at. A weight-and-brightness change rather than a
+   * hue, so it can sit on top of any later categorical role without arguing
+   * with it. */
+  --lane-hot:           #ffffff;
+  --lane-hot-w:         7;
+
   --anchor-ink:         #ffffff;
   --anchor-plate:       #07090d;
   --anchor-plate-op:    .88;
@@ -84,12 +91,38 @@
   --panel-ink:          #dfe6ef;
   --panel-muted:        #8d99a8;
   --panel-rule:         #222c38;
-  --panel-width:        320px;
+  /* Minimised, not comfortable: the panel's width is subtracted from the
+   * graph, and the graph is what the room is looking at. The panel is the
+   * instructor's dashboard rather than the room's, so no projector type floor
+   * applies to it -- it is HTML chrome outside the SVG, and the floor is a
+   * viewBox ratio -- which is what lets it be this dense and still complete. */
+  --panel-width:        272px;
   --panel-type-heading: 15px;
-  --panel-type-row:     13px;
-  --panel-type-label:   11px;
+  --panel-type-row:     12px;
+  --panel-type-label:   10px;
   --panel-control-bg:   #1a212b;
   --panel-control-on:   #0072b2;
+  --panel-stat-value:   17px;
+
+  /* Row-state ticks. The panel is still visible on a mirrored display, so it
+   * may spend NONE of the canvas's categorical roles: each of these is the
+   * canvas hue at low chroma, drawn as a left-edge tick rather than a fill.
+   * `tests/test_web_assets.py` asserts the relationship (less saturated than
+   * every categorical role on the canvas) rather than the values, which are
+   * expected to be retuned against the real projector.
+   *
+   * Only `removed` and `hot` echo a canvas colour that exists today. The cut,
+   * the path and the violation have no canvas hue yet -- their layers land
+   * with #42-#44 -- so those three are provisional stand-ins, to be re-derived
+   * from the real hue when the ticket that authors it lands. They are here now
+   * rather than later because the ledger is built once and its states have to
+   * exist from the first paint. */
+  --panel-tick-width:   3px;
+  --panel-tick-removed:   #444b54;
+  --panel-tick-in-cut:    #6b5b47;
+  --panel-tick-violating: #7a4f4f;
+  --panel-tick-on-path:   #3f6274;
+  --panel-tick-hot:       #aab4c0;
 }
 
 /* ---- page frame ---------------------------------------------------------- */
@@ -178,25 +211,130 @@ html, body {
   border-color: var(--panel-control-on);
 }
 
+/* ---- the headline -------------------------------------------------------- */
+/* Six fixed slots on a three-column grid, so each number keeps its position
+ * for the whole unit. `min-width: 0` on the cells is what stops a long value
+ * widening its column and shuffling the other five. */
+#headline-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px 4px;
+  margin-bottom: 8px;
+}
+
+.stat {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.stat-label {
+  font-size: var(--panel-type-label);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--panel-muted);
+}
+
+.stat-value {
+  font-size: var(--panel-stat-value);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+/* The one A/B pair. It keeps its line whether or not it is saying anything --
+ * hiding it would move everything below it on the beat it appears, which is
+ * the reflow the ledger is at such pains to avoid. */
+#headline-delta {
+  margin: 0;
+  font-size: var(--panel-type-row);
+  font-variant-numeric: tabular-nums;
+  color: var(--panel-muted);
+  visibility: hidden;
+}
+
+#headline-delta.live { visibility: visible; }
+
+#headline-delta .delta-label { margin-right: 6px; }
+#headline-delta .delta-arrow { margin: 0 4px; }
+#headline-delta .delta-after { color: var(--panel-ink); font-weight: 600; }
+
+/* ---- the lane ledger ----------------------------------------------------- */
+/* `table-layout: fixed` is load-bearing, not tidiness. An auto-laid-out table
+ * re-measures its columns from their content, so a two-digit flow becoming
+ * three-digit would shift every column -- including the lane names -- on a
+ * beat that changed nothing else. Fixed columns plus tabular numerals mean the
+ * only thing that moves between beats is the digits themselves. */
 #ledger {
   width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
   font-size: var(--panel-type-row);
   font-variant-numeric: tabular-nums;
 }
+
+/* Nothing is dropped: the name columns wrap inside their width rather than
+ * truncating, and because a lane's endpoints never change, a wrapped row's
+ * height is fixed for the whole dataset. */
+#ledger .col-id   { width: 13%; }
+#ledger .col-src  { width: 20%; }
+#ledger .col-dst  { width: 20%; }
+#ledger .col-cap  { width: 12%; }
+#ledger .col-cost { width: 11%; }
+#ledger .col-risk { width: 12%; }
+#ledger .col-flow { width: 12%; }
 
 #ledger th {
   text-align: left;
   font-size: var(--panel-type-label);
   color: var(--panel-muted);
   font-weight: 500;
-  padding: 2px 4px;
+  padding: 2px 3px;
 }
 
 #ledger td {
-  padding: 2px 4px;
+  padding: 2px 3px;
   border-top: 1px solid var(--panel-rule);
 }
+
+#ledger .name { overflow-wrap: anywhere; }
+#ledger .num  { text-align: right; }
+
+#ledger tbody tr { cursor: pointer; }
+
+/* ---- row states ---------------------------------------------------------- */
+/* The cut's certifying lane list and the interdicted subset are subsets of the
+ * lanes, so they are states on the one row -- never separate DOM. Otherwise
+ * the same lane sits in the panel twice, in two components that can disagree.
+ *
+ * The tick's width is reserved on every row from the first paint, transparent
+ * until a state claims it. A border that appears would move the row's text
+ * sideways on the beat it appears, and the ledger's whole promise is that a
+ * lane's numbers do not move.
+ *
+ * Precedence is source order, later winning: removed, in-cut, violating,
+ * on-path, hot. `render.js` states the same ladder and the reason for it. */
+#ledger tbody td:first-child {
+  border-left: var(--panel-tick-width) solid transparent;
+  padding-left: 4px;
+}
+
+#ledger tr.removed   td:first-child { border-left-color: var(--panel-tick-removed); }
+#ledger tr.in-cut    td:first-child { border-left-color: var(--panel-tick-in-cut); }
+#ledger tr.violating td:first-child { border-left-color: var(--panel-tick-violating); }
+#ledger tr.on-path   td:first-child { border-left-color: var(--panel-tick-on-path); }
+#ledger tr.hot       td:first-child { border-left-color: var(--panel-tick-hot); }
+
+/* The ledger shows every lane always, with hot rows marked -- never filtered
+ * to the cold ones. Filtering reflows on every keypress, and it empties itself
+ * at the moment it should be fullest: on the pristine network, where an empty
+ * hot set means every lane is hot.
+ *
+ * A hot row is marked by its tick and by nothing else -- no fill, and no bolder
+ * weight either. Row-state colour is a left-edge tick rather than a fill for
+ * every state including this one, and weight is worse than a fill here: bolder
+ * glyphs are wider, so a name cell could rewrap and change the row's height,
+ * moving every row below it. The tick is the one channel that costs no metrics
+ * and no canvas role, which is why it is the only one used. */
 
 #ledger tr.removed td {
   color: var(--panel-muted);
@@ -217,6 +355,18 @@ html, body {
   stroke-linecap: round;
   opacity: var(--lane-op);
   fill: none;
+}
+
+/* Transient emphasis, and the canvas half of a ledger-row click: the row and
+ * its lane light up together, because the click has to be visible in the room
+ * and not only on the instructor's display. Nothing reads this state but the
+ * render pass, so there is no click that reaches somewhere `R` cannot undo. */
+/* Scoped away from removed lanes deliberately: emphasis must not overpaint the
+ * struck-out reading, which is the one thing a cut lane is on screen to say.
+ * The row's tick still marks it, so the click is never silent. */
+.lane-group.hot:not(.removed) .lane {
+  stroke: var(--lane-hot);
+  stroke-width: var(--lane-hot-w);
 }
 
 .lane.removed {

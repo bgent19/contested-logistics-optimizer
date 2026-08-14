@@ -54,8 +54,64 @@ const CASING_WIDTH = 14;
  * coordinate has been hand-authored. */
 const FALLBACK = { x0: 60, dx: 200, y0: 90, dy: 130 };
 
+/* ---- the panel's two always-present slots ---------------------------------
+ * The panel is four fixed slots, built once per dataset in this same topology
+ * pass and thereafter mutated only by class and text content. This module
+ * builds the two that are present in all three views; the Pareto table and the
+ * beat timeline arrive with the views that own them.
+ *
+ * The headline's slots are FIXED rather than per-view, so a number the
+ * instructor read on the last beat is in the same place on this one -- an
+ * empty slot says "not on this view" in the place the value would have been,
+ * which is cheaper to read past than a dashboard that reshapes itself.
+ */
+const HEADLINE_SLOTS = [
+  { id: "supply",      label: "Supply" },
+  { id: "demand",      label: "Demand" },
+  { id: "throughput",  label: "Flow" },
+  { id: "cut",         label: "Cut" },
+  /* "Struck", not "Cut": `Cut` above is the min cut's capacity, and two slots
+   * a row apart both reading "cut" is exactly the ambiguity the instructor
+   * would have to resolve out loud. */
+  { id: "interdicted", label: "Struck" },
+  { id: "violations",  label: "Over cap" },
+];
+
+/* The ledger's columns. Widths are percentages and the table is laid out
+ * `fixed` -- see the note in `style.css`: an auto-laid-out table re-measures
+ * its columns when a cell's text changes, so a two-digit flow becoming
+ * three-digit would shift every column under the instructor's finger on a beat
+ * that changed nothing else. */
+const LEDGER_COLUMNS = [
+  /* `cell` is the lane's own identity, written once at build time and never
+   * again. A column with no `cell` is one the render pass owns: capacity and
+   * risk move under a threat picture, and flow moves on every beat, so their
+   * text -- and the formatting of it -- belongs to `render.js` alone. Giving
+   * them a builder here too would put the same `toFixed(2)` in two modules,
+   * and a retune of the precision would have to find both.
+   *
+   * The flow column exists from here regardless, empty until the Flow & Cut
+   * view fills it: the ledger is built once per dataset, so a column added on
+   * the day its numbers arrive would be a structural change to a built slot. */
+  { key: "id",   head: "Lane", cell: (edge) => edge.id,  numeric: false },
+  { key: "src",  head: "From", cell: (edge) => edge.src, numeric: false },
+  { key: "dst",  head: "To",   cell: (edge) => edge.dst, numeric: false },
+  { key: "cap",  head: "Cap",  numeric: true },
+  { key: "cost", head: "Cost", cell: (edge) => edge.cost, numeric: true },
+  { key: "risk", head: "Risk", numeric: true },
+  { key: "flow", head: "Flow", numeric: true },
+];
+
 /** The handle map, `{edgeId: bundle}` and `{nodeId: bundle}`. See `buildGraph`. */
-export const handles = { nodes: new Map(), edges: new Map(), terminals: new Map() };
+export const handles = {
+  nodes: new Map(),
+  edges: new Map(),
+  terminals: new Map(),
+  /** slotId -> the `<span>` holding that headline number. */
+  headline: new Map(),
+  /** The A/B pair's three cells, `{root, label, before, after}`. */
+  delta: null,
+};
 
 /** The frozen solves, filled by `buildGraph` and read by `render.js`. */
 export const frozen = {
@@ -321,9 +377,78 @@ function terminalLinks(nodes) {
   return links;
 }
 
+/* ---- the ledger's frame ---------------------------------------------------
+ * The `<col>` and `<th>` elements are built from `LEDGER_COLUMNS` rather than
+ * written out in the markup, so the column list lives in exactly one place and
+ * a column cannot gain a header without gaining a cell.
+ *
+ * Each `<col>` carries a class and no width: column widths are appearance and
+ * belong to the stylesheet, like every other appearance value on the page.
+ */
+function buildLedgerFrame() {
+  const cols = document.getElementById("ledger-cols");
+  const head = document.getElementById("ledger-head");
+  clearChildren(cols);
+  clearChildren(head);
+
+  const headRow = document.createElement("tr");
+  for (const column of LEDGER_COLUMNS) {
+    const col = document.createElement("col");
+    col.className = `col-${column.key}`;
+    cols.appendChild(col);
+
+    const cell = document.createElement("th");
+    cell.className = column.numeric ? "num" : "name";
+    cell.textContent = column.head;
+    headRow.appendChild(cell);
+  }
+  head.appendChild(headRow);
+}
+
 /* ---- the build ------------------------------------------------------------ */
 function clearChildren(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
+}
+
+/** An HTML element carrying a class and, optionally, some text. */
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/* ---- the headline ---------------------------------------------------------
+ * Six fixed stat cells and one A/B pair, built once and thereafter written
+ * only through `textContent`. No `innerHTML` here or anywhere else in the
+ * panel: a slot rebuilt from a string loses its handles, and the handle is
+ * what makes a row and its lane demonstrably the same object.
+ */
+function buildHeadline() {
+  const stats = document.getElementById("headline-stats");
+  clearChildren(stats);
+  handles.headline.clear();
+
+  for (const slot of HEADLINE_SLOTS) {
+    const cell = el("div", "stat");
+    cell.appendChild(el("span", "stat-label", slot.label));
+    const value = el("span", "stat-value", "—");
+    cell.appendChild(value);
+    stats.appendChild(cell);
+    handles.headline.set(slot.id, value);
+  }
+
+  /* The one A/B pair. Its label is written by whichever view owns the flip,
+   * because *which* number is being compared is the view's business -- but
+   * there is only ever one pair, and it is always here. */
+  const root = document.getElementById("headline-delta");
+  clearChildren(root);
+  const label = el("span", "delta-label");
+  const before = el("span", "delta-before");
+  const arrow = el("span", "delta-arrow", "→");
+  const after = el("span", "delta-after");
+  for (const part of [label, before, arrow, after]) root.appendChild(part);
+  handles.delta = { root, label, before, after };
 }
 
 /**
@@ -341,10 +466,17 @@ export function buildGraph(svg, payload) {
     annotation: svg.querySelector("#tier-annotation"),
   };
   for (const tier of Object.values(tiers)) clearChildren(tier);
-  clearChildren(document.getElementById("ledger-rows"));
   handles.nodes.clear();
   handles.edges.clear();
   handles.terminals.clear();
+
+  /* The panel's two always-present slots are built in this same pass, because
+   * a ledger row and its lane are the same domain object -- see the bundle
+   * below. */
+  buildHeadline();
+  const ledgerRows = document.getElementById("ledger-rows");
+  clearChildren(ledgerRows);
+  buildLedgerFrame();
 
   /* -- positions: authored, then the fallback for anything unplaced -------- */
   const positions = new Map();
@@ -376,7 +508,6 @@ export function buildGraph(svg, payload) {
     handles.terminals.set(`${link.role}:${link.nodeId}`, { line, link });
   }
 
-  const ledgerRows = document.getElementById("ledger-rows");
   for (const edge of network.edges) {
     const group = element("g", { class: "lane-group", "data-edge": edge.id });
     const line = element("line", { class: "lane" });
@@ -390,15 +521,28 @@ export function buildGraph(svg, payload) {
     /* One handle bundle per domain object, spanning canvas and panel. The
      * ledger row is built in this same topology pass because it IS the same
      * domain object -- which makes row-to-lane identity structural rather than
-     * a lookup performed later and possibly wrongly. */
+     * a lookup performed later and possibly wrongly.
+     *
+     * The ledger carries one row per stored lane, ALWAYS, in stored-edge
+     * order, and is never filtered to the cold ones. Filtering fails twice: it
+     * reflows on every keypress -- the hot set is a two-to-four lane path that
+     * changes at every beat, and rows shifting under a lane's name is the one
+     * thing a flip-book does not survive -- and it empties itself at the
+     * moment it should be fullest, on the pristine network, where an empty hot
+     * set means *every* lane is hot and the instructor is most likely reading
+     * lane numbers aloud. Showing everything and marking the hot rows gives
+     * the ledger the job it needed anyway: it is the printed key to the
+     * canvas. */
     const row = document.createElement("tr");
     row.dataset.edge = edge.id;
-    const cells = [edge.id, edge.src, edge.dst].map((text) => {
+    const ledgerCells = {};
+    for (const column of LEDGER_COLUMNS) {
       const cell = document.createElement("td");
-      cell.textContent = text;
-      return cell;
-    });
-    for (const cell of cells) row.appendChild(cell);
+      cell.className = column.numeric ? "num" : "name";
+      if (column.cell) cell.textContent = column.cell(edge);
+      row.appendChild(cell);
+      ledgerCells[column.key] = cell;
+    }
     ledgerRows.appendChild(row);
 
     handles.edges.set(edge.id, {
@@ -408,6 +552,7 @@ export function buildGraph(svg, payload) {
       glyphs: [glyphOne, glyphTwo],
       canvasLabel: null,     /* filled below, on the annotation tier */
       ledgerRow: row,
+      ledgerCells,
       casingStubs: [],
     });
   }

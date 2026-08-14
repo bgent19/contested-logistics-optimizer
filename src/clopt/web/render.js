@@ -20,7 +20,12 @@
  */
 
 import { frozen, geometry, handles } from "./graph.js";
-import { edgeChanges, isRemoved } from "./state.js";
+import { edgeChanges, isRemoved, laneStates, ROW_STATES } from "./state.js";
+
+/** The em dash an empty headline slot shows. A slot is never blank: a gap
+ *  reads as a number that failed to arrive, where "—" reads as "not on this
+ *  view", which is what it means. */
+const EMPTY = "—";
 
 const GLYPH = 13;   /* half-diagonal of the struck-out X, in diagram units */
 
@@ -71,6 +76,51 @@ function place(line, segment) {
   line.setAttribute("y2", segment.y2);
 }
 
+/** Write one headline slot, showing the em dash rather than a gap when the
+ *  active view does not own that number. */
+function slot(id, value) {
+  handles.headline.get(id).textContent =
+    value === null || value === undefined ? EMPTY : String(value);
+}
+
+/**
+ * The headline's six numbers and its one A/B pair.
+ *
+ * The split between the two kinds of number is the point. The struck count and
+ * the violation count are *counts of a lane subset*, so they are counted from
+ * the very flags that classed the rows -- the number and the lanes justifying
+ * it are one rendering and cannot come apart. Throughput and cut capacity are
+ * solver scalars: no subset certifies them, the server computed them, and
+ * re-deriving either here would put two numbers that must be equal on the
+ * dashboard by two different routes.
+ */
+function renderHeadline(state, certificates) {
+  const scenario = state.scenario;
+  slot("supply", scenario.total_supply);
+  slot("demand", scenario.total_demand);
+  slot("throughput", state.throughput);
+  slot("cut", state.cut);
+  slot("interdicted", certificates.removed);
+  slot("violations", certificates.violating);
+
+  /* The one A/B pair. This ticket owns the slot; the value belongs to whichever
+   * view owns the flip, so there is deliberately no fallback pair invented
+   * here. A derived statistic nobody asked for, on screen always, is exactly
+   * what a fixed dashboard is meant to make impossible. The line holds its
+   * space and says nothing until a view claims it. */
+  const { root, label, before, after } = handles.delta;
+  const pair = state.delta;
+  label.textContent = pair ? pair.label : "";
+  before.textContent = pair ? String(pair.before) : "";
+  after.textContent = pair ? String(pair.after) : "";
+  /* Shown only when the two sides actually differ. A pair reading `12 → 12` is
+   * a line the instructor has to read to discover says nothing. */
+  root.classList.toggle(
+    "live",
+    Boolean(pair) && String(pair.before) !== String(pair.after),
+  );
+}
+
 /** Repaint everything from the current state. Idempotent, and cheap enough to
  *  run on every keypress -- there is no diffing here because there is nothing
  *  to diff: a twelve-lane theater is a few dozen attribute writes. */
@@ -103,16 +153,45 @@ export function render(state) {
   }
 
   /* -- lanes --------------------------------------------------------------- */
+  /* The certificates the headline's numbers are read off. Accumulated inside
+   * the lane loop rather than computed beside it, so the count and the marked
+   * rows cannot come apart. */
+  const certificates = { removed: 0, violating: 0 };
+
   for (const [edgeId, bundle] of handles.edges) {
     const a = positions.get(bundle.edge.src);
     const b = positions.get(bundle.edge.dst);
     const segment = trim(a, b, NODE_R, NODE_R + LANE_GAP);
     place(bundle.line, segment);
 
-    const removed = isRemoved(changes, edgeId);
+    /* Capacity and risk under the active threat picture, from the server's
+     * `changes` block -- never arithmetic performed here. Read before the
+     * states below because cut capacity is a sum over the very lanes those
+     * states mark. */
+    const change = changes.get(edgeId);
+    const cap = change ? change.cap : bundle.edge.cap;
+    const risk = change ? change.risk : bundle.edge.risk;
+
+    /* One call, two consumers: the row's classes and the headline's counts.
+     * That is what makes a headline number and the lanes certifying it one
+     * rendering rather than two that can disagree. */
+    const states = laneStates(state, changes, edgeId);
+    if (states.removed) certificates.removed += 1;
+    if (states.violating) certificates.violating += 1;
+    /* Toggling is order-independent -- a row can be in several states at once
+     * and all of them are written. Which tick colour WINS when it is is source
+     * order in `style.css`, and it is written down there. */
+    for (const name of ROW_STATES) {
+      bundle.ledgerRow.classList.toggle(name, states[name]);
+    }
+    /* The canvas lane carries the emphasis states too, so a pinned row and its
+     * lane light up together -- the click has to be visible in the room, not
+     * only on the instructor's display. */
+    bundle.group.classList.toggle("hot", states.hot);
+
+    const removed = states.removed;
     bundle.group.classList.toggle("removed", removed);
     bundle.line.classList.toggle("removed", removed);
-    bundle.ledgerRow.classList.toggle("removed", removed);
 
     /* The X that says "gone" sits on the anchor, not the midpoint, so it lands
      * where the lane's numerals already live rather than on a crossing. */
@@ -140,10 +219,15 @@ export function render(state) {
       });
     }
 
+    /* -- the ledger's mutable cells ---------------------------------------- *
+     * The three numbers a threat picture can move. The lane's identity cells
+     * were written at build time and never change; these are text content on
+     * cells that already exist, in a table laid out `fixed`, so nothing
+     * reflows when a two-digit capacity becomes three. */
+    bundle.ledgerCells.cap.textContent = String(cap);
+    bundle.ledgerCells.risk.textContent = risk.toFixed(2);
+
     /* -- the anchor's text ------------------------------------------------- */
-    const change = changes.get(edgeId);
-    const cap = change ? change.cap : bundle.edge.cap;
-    const risk = change ? change.risk : bundle.edge.risk;
     const { plate, stats, flow } = bundle.canvasLabel;
 
     stats.setAttribute("x", anchor.x);
@@ -163,6 +247,8 @@ export function render(state) {
     plate.setAttribute("width", width);
     plate.setAttribute("height", PLATE_HEIGHT);
   }
+
+  renderHeadline(state, certificates);
 
   /* -- nodes --------------------------------------------------------------- */
   for (const [nodeId, bundle] of handles.nodes) {
