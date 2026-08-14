@@ -50,6 +50,15 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The teaching frontend ships INSIDE the installed package, so `pip install` of
+# this repo gets it with no separate step and `make api` stays the only command.
+# Without this the wheel carries the Python and silently omits `web/`, and the
+# failure appears as a 404 at `/` on a machine that was installed from a wheel
+# rather than in editable mode -- which is to say, on the teaching laptop and
+# never on the developer's.
+[tool.setuptools.package-data]
+clopt = ["web/*.html", "web/*.css", "web/*.js"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

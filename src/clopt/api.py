@@ -2,7 +2,8 @@
 
 Run with:
     uvicorn clopt.api:app --reload
-or via the Makefile / Docker. Interactive docs at /docs.
+or via the Makefile / Docker. The teaching frontend is at /, interactive docs
+at /docs. `make api` serves both; there is no build step and no second command.
 
 The API loads *every* dataset in `data/` at startup (plus whatever CLOPT_DATA
 names, if that path lives elsewhere) and serves allocation, routing,
@@ -26,9 +27,11 @@ picture to a fresh copy, so requests never leak state.
 from  __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .datasets import DatasetRegistry, build_registry
@@ -651,3 +654,20 @@ def interdict(
       "subsets_considered": res.subsets_considered,
       "min_cut_capacity": res.min_cut_capacity,
    }
+
+
+# ---- the teaching frontend --------------------------------------------------
+# Mounted LAST, and that is the whole of why it works: Starlette matches routes
+# in the order they were added, so every endpoint above and FastAPI's own /docs
+# and /openapi.json -- registered when `FastAPI()` was constructed -- are tried
+# before this catch-all. Moving this mount up the file would swallow them.
+#
+# The assets live inside the package rather than beside it, so `pip install` of
+# this repo gets the frontend with no separate step and `make api` remains the
+# only command. `html=True` serves index.html for `/`.
+#
+# Edit-loop note: uvicorn's `--reload` does not watch static files, so a change
+# under `web/` needs a hard refresh rather than a server restart.
+WEB_DIR = Path(__file__).parent / "web"
+
+app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")

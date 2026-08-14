@@ -1,0 +1,335 @@
+/* Every appearance value on the page, and the only file that holds one.
+ *
+ * The discipline: JS sets geometry, text content and classes; CSS owns colour,
+ * weight, dash, opacity and type size. Under it, retuning the diagram against
+ * the real projector is a pass over the `:root` block below and nothing else --
+ * the legibility rig's deliverable is a list of values for names that already
+ * exist here, not a patch across seven modules.
+ *
+ * Two naming rules the test suite enforces (`tests/test_web_assets.py`):
+ *
+ *   --type-*   canvas type, in DIAGRAM UNITS. Scales with the graph, and must
+ *              clear 2% of the viewBox height (14.4 of 720) or it is gone from
+ *              the back of the room.
+ *   --panel-*  panel chrome, in CSS PIXELS. Never wears `--type-`, because a
+ *              pixel size judged against a fraction of the viewBox is a
+ *              meaningless comparison.
+ *
+ * Values below are the legibility prototype's variant B -- the redundant-channel
+ * palette (Okabe-Ito), where nothing rests on hue alone. They are *expected* to
+ * be retuned against the real projector; that is why no test asserts them.
+ */
+
+:root {
+  /* ---- ground ---------------------------------------------------------- */
+  --bg:                 #07090d;
+
+  /* ---- nodes ----------------------------------------------------------- */
+  --node-supply:        #0072b2;
+  --node-transit:       #3a4653;
+  --node-demand:        #d55e00;
+  --node-stroke:        #ffffff;
+  --node-stroke-w:      3;
+  --node-ink:           #ffffff;
+
+  /* ---- lanes ----------------------------------------------------------- */
+  --lane:               #dfe6ef;
+  --lane-w:             4.5;
+  --lane-dash:          none;
+  --lane-op:            1;
+
+  /* The super-source and super-sink machinery. Dotted rather than dashed --
+   * a different register, so derived scaffolding never reads as a real lane
+   * the instructor authored. */
+  --synth:              #8d99a8;
+  --synth-w:            3;
+  --synth-dash:         2 9;
+  --synth-fill:         #22303f;
+  --synth-stroke:       #8d99a8;
+  --synth-ink:          #ffffff;
+
+  /* Removal is a style, not a deletion: a cut lane stays on screen, struck
+   * out. Grey rather than red, so it reads as ABSENT rather than as alarming,
+   * and the X is what actually says "gone". */
+  --removed:            #999999;
+  --removed-w:          3;
+  --removed-dash:       3 7;
+  --removed-op:         .55;
+  --removed-glyph-w:    3;
+
+  /* ---- annotation tier ------------------------------------------------- */
+  /* The knockout casing at a lane crossing. Painted in the background colour
+   * on the annotation tier only -- never lane over lane -- so the pristine
+   * opening screen carries zero marks. */
+  --casing:             #07090d;
+  --casing-w:           14;
+
+  --anchor-ink:         #ffffff;
+  --anchor-plate:       #07090d;
+  --anchor-plate-op:    .88;
+
+  /* ---- canvas type, in diagram units ----------------------------------- */
+  /* Hard floor 720/50 = 14.4, comfortable target 720/40 = 18. Node quantity
+   * was 11 before the floor was measured; that is the value this rule caught.
+   * Sizes between the floor and the target are a deliberate choice and not a
+   * warning -- see the note in `tests/test_web_assets.py`. */
+  --type-node-id:       17;
+  --type-node-quantity: 15;
+  --type-terminal:      17;
+  --type-lane-label:    15;
+  --type-flow:          19;
+
+  /* ---- panel and chrome, in CSS pixels --------------------------------- */
+  --panel-bg:           #10141b;
+  --panel-ink:          #dfe6ef;
+  --panel-muted:        #8d99a8;
+  --panel-rule:         #222c38;
+  --panel-width:        320px;
+  --panel-type-heading: 15px;
+  --panel-type-row:     13px;
+  --panel-type-label:   11px;
+  --panel-control-bg:   #1a212b;
+  --panel-control-on:   #0072b2;
+}
+
+/* ---- page frame ---------------------------------------------------------- */
+/* A system font stack only. A web-font link is a network fetch and therefore a
+ * live-class outage. */
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--panel-ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+               Arial, sans-serif;
+}
+
+#app {
+  display: flex;
+  height: 100%;
+}
+
+/* The canvas takes whatever the panel does not, at any aspect ratio -- this is
+ * what lets the same page fill a fullscreen projector and a laptop. */
+#canvas {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+#theater {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- side panel ---------------------------------------------------------- */
+#panel {
+  flex: 0 0 var(--panel-width);
+  background: var(--panel-bg);
+  border-left: 1px solid var(--panel-rule);
+  overflow-y: auto;
+  padding: 12px 14px;
+  box-sizing: border-box;
+}
+
+#panel h1 {
+  font-size: var(--panel-type-heading);
+  margin: 0 0 2px;
+}
+
+#panel .subtitle {
+  font-size: var(--panel-type-label);
+  color: var(--panel-muted);
+  margin: 0 0 14px;
+}
+
+#panel h2 {
+  font-size: var(--panel-type-label);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--panel-muted);
+  margin: 16px 0 6px;
+  border-bottom: 1px solid var(--panel-rule);
+  padding-bottom: 4px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.controls button,
+.controls select {
+  font: inherit;
+  font-size: var(--panel-type-row);
+  color: var(--panel-ink);
+  background: var(--panel-control-bg);
+  border: 1px solid var(--panel-rule);
+  border-radius: 3px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.controls select { width: 100%; }
+
+.controls button[aria-pressed="true"] {
+  background: var(--panel-control-on);
+  border-color: var(--panel-control-on);
+}
+
+#ledger {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--panel-type-row);
+  font-variant-numeric: tabular-nums;
+}
+
+#ledger th {
+  text-align: left;
+  font-size: var(--panel-type-label);
+  color: var(--panel-muted);
+  font-weight: 500;
+  padding: 2px 4px;
+}
+
+#ledger td {
+  padding: 2px 4px;
+  border-top: 1px solid var(--panel-rule);
+}
+
+#ledger tr.removed td {
+  color: var(--panel-muted);
+  text-decoration: line-through;
+}
+
+/* ---- the diagram --------------------------------------------------------- */
+/* Stroke widths and type sizes are authored in diagram units and scale with
+ * the graph. No `vector-effect: non-scaling-stroke` anywhere: a gutter that
+ * clears at authoring time must clear at every projector size, and fixed-pixel
+ * chrome would collapse those gutters exactly where hand-placement was doing
+ * its work. */
+
+.lane {
+  stroke: var(--lane);
+  stroke-width: var(--lane-w);
+  stroke-dasharray: var(--lane-dash);
+  stroke-linecap: round;
+  opacity: var(--lane-op);
+  fill: none;
+}
+
+.lane.removed {
+  stroke: var(--removed);
+  stroke-width: var(--removed-w);
+  stroke-dasharray: var(--removed-dash);
+  opacity: var(--removed-op);
+}
+
+.removed-glyph {
+  stroke: var(--removed);
+  stroke-width: var(--removed-glyph-w);
+  stroke-linecap: round;
+  display: none;
+}
+
+.lane-group.removed .removed-glyph { display: inline; }
+
+.synth {
+  stroke: var(--synth);
+  stroke-width: var(--synth-w);
+  stroke-dasharray: var(--synth-dash);
+  fill: none;
+}
+
+.terminal circle {
+  fill: var(--synth-fill);
+  stroke: var(--synth-stroke);
+  stroke-width: var(--synth-w);
+}
+
+.terminal text {
+  fill: var(--synth-ink);
+  font-size: var(--type-terminal);
+  text-anchor: middle;
+  font-weight: 600;
+}
+
+.node circle {
+  stroke: var(--node-stroke);
+  stroke-width: var(--node-stroke-w);
+}
+
+.node.supply  circle { fill: var(--node-supply); }
+.node.transit circle { fill: var(--node-transit); }
+.node.demand  circle { fill: var(--node-demand); }
+
+.node text {
+  fill: var(--node-ink);
+  text-anchor: middle;
+  paint-order: stroke;
+}
+
+.node .node-id       { font-size: var(--type-node-id); font-weight: 600; }
+.node .node-quantity { font-size: var(--type-node-quantity); }
+
+/* A transit node carries no stock, so its quantity line is suppressed rather
+ * than drawn as a zero the class would have to explain. */
+.node.transit .node-quantity { display: none; }
+
+/* ---- annotation tier ----------------------------------------------------- */
+/* Anchors and casings exist in the DOM from the first paint and show nothing
+ * until a layer that owns marks is switched on. That is the pristine-screen
+ * guarantee: the substrate is built, and it is invisible. */
+.anchor-label {
+  fill: var(--anchor-ink);
+  font-size: var(--type-flow);
+  text-anchor: middle;
+  dominant-baseline: middle;
+  display: none;
+}
+
+.anchor-plate {
+  fill: var(--anchor-plate);
+  opacity: var(--anchor-plate-op);
+  display: none;
+}
+
+.lane-label {
+  fill: var(--anchor-ink);
+  font-size: var(--type-lane-label);
+  text-anchor: middle;
+  dominant-baseline: middle;
+  display: none;
+}
+
+.casing {
+  stroke: var(--casing);
+  stroke-width: var(--casing-w);
+  stroke-linecap: butt;
+  display: none;
+}
+
+/* Layer visibility is a root class, set by `views.js`. Every rule that turns a
+ * mark on lives here, so a view is a set of class names rather than a set of
+ * style writes. */
+.show-lanelabels .lane-label { display: inline; }
+.show-flow .anchor-label     { display: inline; }
+
+/* The plate and the casing follow the marks they back, not one named layer.
+ * Either annotation layer puts text on the annotation tier over the lanes, and
+ * text over a lane needs its plate under it and its crossings broken -- so
+ * both appear whenever either does. Listing only `.show-flow` here is what put
+ * unbacked numerals on the opening screen once already. */
+.show-lanelabels .anchor-plate,
+.show-flow .anchor-plate { display: inline; }
+
+/* The casing is bought exactly when a route is being traced over the lanes,
+ * and not before: on the pristine screen there is nothing above the lane tier,
+ * so there is nothing to break and the crossings stay unmarked. */
+.show-lanelabels .casing,
+.show-flow .casing { display: inline; }
+
+/* Arrowheads are appearance, so they are attached here rather than written
+ * onto each line from JavaScript. */
+.lane, .synth { marker-end: url(#arrowhead); }

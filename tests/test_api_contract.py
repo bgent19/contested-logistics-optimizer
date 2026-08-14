@@ -974,6 +974,39 @@ def _lopsided_scenario():
     }
 
 
+def test_the_frontend_is_served_at_the_root():
+    response = client.get("/")
+
+    assert response.status_code == 200, response.text
+    assert "text/html" in response.headers["content-type"]
+    assert "<svg" in response.text, "the root served something that is not the theater"
+
+
+@pytest.mark.parametrize(
+    "path", ["/style.css", "/api.js", "/state.js", "/graph.js", "/render.js", "/views.js"]
+)
+def test_every_module_is_reachable_from_the_root_mount(path):
+    # The mount serves the whole directory, so this is really one assertion
+    # about `html=True` not swallowing sibling files -- the failure mode where
+    # `/` works, every module 404s, and the page is a blank projector.
+    response = client.get(path)
+
+    assert response.status_code == 200, response.text
+
+
+def test_the_static_mount_does_not_swallow_the_api():
+    """`/docs` still works, and so does every endpoint.
+
+    The mount is a catch-all at `/`, so it is exactly the change that can eat
+    the rest of the app. Ordering is what prevents that, and ordering is not
+    visible at the call site -- hence a test rather than a comment alone.
+    """
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+    assert client.get("/health").json() == {"status": "ok"}
+    assert client.get("/scenario").status_code == 200
+
+
 def _naive_from(tmp_path, scenario, lambdas):
     """GET /naive against a hand-built theater, parsed as a browser would.
 
