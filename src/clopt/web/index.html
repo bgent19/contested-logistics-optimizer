@@ -47,7 +47,6 @@
           bare lanes are the same hue and weight and which is on top is not a
           fact about the graph.
         -->
-        <g id="tier-territory"></g>
         <g id="tier-lanes"></g>
         <g id="tier-nodes"></g>
         <g id="tier-annotation"></g>
@@ -147,6 +146,9 @@
 
     async function load(datasetId) {
       const payload = await fetchScenario(datasetId);
+      // Recorded here rather than only in the select's change handler, so the
+      // field is true after the first load as well as after a switch.
+      setDataset(datasetId);
       setScenario(payload);
       // The DOM is rebuilt exactly once per dataset, and never again for that
       // dataset. Every later state change is a render pass over elements that
@@ -167,14 +169,17 @@
         option.textContent = dataset.name;
         select.appendChild(option);
       }
-      select.addEventListener("change", () => {
-        setDataset(select.value);
-        load(select.value);
-      });
+      select.addEventListener("change", () => load(select.value));
 
       buildControls();
       setView(VIEWS[0].id);
-      await load(datasets.length ? datasets[0].id : undefined);
+
+      // An empty menu means the server loaded no dataset at all, which it
+      // refuses to do -- so reaching here is a broken deployment, and it says
+      // so rather than quietly requesting `/scenario` with no dataset and
+      // drawing whatever the default happens to be.
+      if (!datasets.length) throw new Error("/datasets returned nothing to draw");
+      await load(datasets[0].id);
     }
 
     boot();

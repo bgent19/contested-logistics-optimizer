@@ -238,6 +238,28 @@ def test_panel_type_is_not_named_like_canvas_type(stylesheet):
 # run forever, and a diagnostic that is always on is one nobody reads.
 
 
+def test_the_casing_width_agrees_across_its_three_homes(assets, stylesheet):
+    """`14` lives in three files, and nothing else makes them agree.
+
+    The casing is a stroke that has to cover the lane it breaks: `graph.js`
+    computes the stub's LENGTH from the width, `style.css` paints it at that
+    width, and `tests/layout_geometry.py` derives the anchor clearance from it.
+    Change one and the knockout stops covering the lane -- a break that no
+    longer breaks, discovered on a projector. The duplication is unavoidable
+    (a stylesheet cannot import a JS constant), so it is pinned instead.
+    """
+    from layout_geometry import CASING_WIDTH
+
+    css = _numeric_tokens(stylesheet)["--casing-w"]
+    js = re.search(r"const CASING_WIDTH\s*=\s*([\d.]+)", assets["graph.js"])
+    assert js, "graph.js no longer declares CASING_WIDTH"
+
+    assert css == float(js.group(1)) == CASING_WIDTH, (
+        f"casing width disagrees: style.css {css}, graph.js {js.group(1)}, "
+        f"layout_geometry.py {CASING_WIDTH}"
+    )
+
+
 # ---- structural rules -------------------------------------------------------
 def test_the_module_inventory_is_what_the_spec_fixed():
     for name in MODULES:

@@ -315,9 +315,21 @@ html, body {
  * style writes. */
 .show-lanelabels .lane-label { display: inline; }
 .show-flow .anchor-label     { display: inline; }
-.show-flow .anchor-plate     { display: inline; }
 
-/* The casing appears only when something is painted on the annotation tier
- * above the lanes -- which is exactly when a crossing would otherwise read as
- * a junction along a traced path. */
+/* The plate and the casing follow the marks they back, not one named layer.
+ * Either annotation layer puts text on the annotation tier over the lanes, and
+ * text over a lane needs its plate under it and its crossings broken -- so
+ * both appear whenever either does. Listing only `.show-flow` here is what put
+ * unbacked numerals on the opening screen once already. */
+.show-lanelabels .anchor-plate,
+.show-flow .anchor-plate { display: inline; }
+
+/* The casing is bought exactly when a route is being traced over the lanes,
+ * and not before: on the pristine screen there is nothing above the lane tier,
+ * so there is nothing to break and the crossings stay unmarked. */
+.show-lanelabels .casing,
 .show-flow .casing { display: inline; }
+
+/* Arrowheads are appearance, so they are attached here rather than written
+ * onto each line from JavaScript. */
+.lane, .synth { marker-end: url(#arrowhead); }

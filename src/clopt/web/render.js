@@ -24,6 +24,28 @@ import { edgeChanges, isRemoved } from "./state.js";
 
 const GLYPH = 13;   /* half-diagonal of the struck-out X, in diagram units */
 
+/* Type-dependent geometry, in diagram units.
+ *
+ * These four track `--type-lane-label` (15) and `--type-node-*`, and that
+ * dependence is the reason they are named here instead of sitting inline. A
+ * projector retune is explicitly expected to change those tokens, and the
+ * plate is sized in JavaScript because only JavaScript knows how many
+ * characters the text came out as -- so a type change that nobody carries over
+ * to these numbers leaves every plate the wrong size around correct text,
+ * which looks like a rendering bug rather than a stale constant.
+ *
+ * Deliberately NOT measured with `getBBox()`: the plate is `display: none`
+ * until its layer is switched on, and a hidden element measures as zero.
+ */
+const CHAR_ADVANCE = 9;        /* mean glyph advance at --type-lane-label */
+const PLATE_MIN_CHARS = 3;     /* so a one-digit label still gets a plate */
+const PLATE_HALF_HEIGHT = 12;
+const PLATE_HEIGHT = 24;
+
+/* Baseline nudges: SVG `y` is a text baseline, not a centre. */
+const CENTRE_BASELINE = 6;     /* drop a centred line to optical middle */
+const LABEL_GAP = 12;          /* air between a node's disc and its id */
+
 /**
  * Shorten a segment so it starts and ends clear of the discs it joins.
  *
@@ -87,7 +109,7 @@ export function render(state) {
     const segment = trim(a, b, NODE_R, NODE_R + LANE_GAP);
     place(bundle.line, segment);
 
-    const removed = isRemoved(edgeId, state);
+    const removed = isRemoved(changes, edgeId);
     bundle.group.classList.toggle("removed", removed);
     bundle.line.classList.toggle("removed", removed);
     bundle.ledgerRow.classList.toggle("removed", removed);
@@ -122,24 +144,24 @@ export function render(state) {
     const change = changes.get(edgeId);
     const cap = change ? change.cap : bundle.edge.cap;
     const risk = change ? change.risk : bundle.edge.risk;
-    const { plate, label, flow } = bundle.canvasLabel;
+    const { plate, stats, flow } = bundle.canvasLabel;
 
-    label.setAttribute("x", anchor.x);
-    label.setAttribute("y", anchor.y);
+    stats.setAttribute("x", anchor.x);
+    stats.setAttribute("y", anchor.y);
     /* Capacity, cost and risk, from the payload or from the server's `changes`
      * block -- never arithmetic performed here. */
-    label.textContent = `${cap}/${bundle.edge.cost}/${risk.toFixed(2)}`;
+    stats.textContent = `${cap}/${bundle.edge.cost}/${risk.toFixed(2)}`;
 
     flow.setAttribute("x", anchor.x);
     flow.setAttribute("y", anchor.y);
 
     /* The plate is sized from the text it backs, which is geometry; its fill
      * and opacity are the stylesheet's business. */
-    const width = Math.max(label.textContent.length, 3) * 9;
+    const width = Math.max(stats.textContent.length, PLATE_MIN_CHARS) * CHAR_ADVANCE;
     plate.setAttribute("x", anchor.x - width / 2);
-    plate.setAttribute("y", anchor.y - 12);
+    plate.setAttribute("y", anchor.y - PLATE_HALF_HEIGHT);
     plate.setAttribute("width", width);
-    plate.setAttribute("height", 24);
+    plate.setAttribute("height", PLATE_HEIGHT);
   }
 
   /* -- nodes --------------------------------------------------------------- */

@@ -142,6 +142,29 @@ def test_unauthored_nodes_serialise_as_null():
     assert node["x"] is None and node["y"] is None
 
 
+def test_an_unauthored_dataset_skips_rather_than_passing():
+    """The loud-skip guard, exercised directly.
+
+    Every shipped dataset is fully authored, so the skip path in `_layout` is
+    never taken by the parameterised checks below -- which makes it exactly the
+    kind of guard that is broken and never noticed. Asserting on the two
+    readers it depends on is the closest a test can get without shipping a
+    coordinate-free file purely to be skipped.
+    """
+    unauthored = {"network": {
+        "nodes": [{"id": "A", "kind": "supply", "x": None, "y": None},
+                  {"id": "B", "kind": "demand", "x": None, "y": None}],
+        "edges": [{"src": "A", "dst": "B"}],
+    }}
+
+    positions = placed_nodes(unauthored)
+
+    assert positions == {}, "an unplaced node was treated as placed"
+    # And with nothing placed, no lane is drawable -- so the geometry checks
+    # have nothing to assert and must say so rather than pass.
+    assert drawn_lanes(unauthored, positions) == []
+
+
 @pytest.mark.parametrize("filename", DATASETS)
 def test_nodes_clear_each_other(filename):
     positions, _ = _layout(filename)

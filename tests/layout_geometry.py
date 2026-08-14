@@ -46,10 +46,23 @@ ANCHOR_CLEAR_OF_CROSSING = 44.0
 # Two node plates, side by side, with their labels.
 NODE_CLEAR_OF_NODE = 90.8
 
-# Below this a lane cannot carry an anchor at all: the anchor needs
-# ANCHOR_CLEAR_OF_NODE from each endpoint, and 2 * 74 > 120 leaves the midpoint
-# as the only candidate -- so 120 is the length at which the slide dies.
-MIN_LANE_LENGTH = 120.0
+# Below this a lane cannot carry an anchor at all, because the anchor must
+# clear ANCHOR_CLEAR_OF_NODE from BOTH of its own endpoints -- so the shortest
+# lane with any feasible anchor position is exactly twice that clearance, and
+# at that length the midpoint is the only candidate.
+#
+# The spec (issue #39) names 120 here. That number is not consistent with the
+# 74 it names one line earlier: 2 * 74 is 148, and on a 120-unit lane EVERY
+# candidate position, midpoint included, sits inside 74 of an endpoint. A lane
+# between 120 and 148 would therefore pass a 120 floor and then fail
+# `test_every_lane_gets_a_clear_anchor` -- one requirement failing to catch
+# what the next one does, which is how a floor comes to be believed and never
+# fires. The derived value is used instead, and it is derived rather than
+# restated so the two cannot drift apart again.
+#
+# Nothing shipped is affected: the shortest lane in `data/` is 242 units, which
+# clears both numbers comfortably.
+MIN_LANE_LENGTH = 2 * ANCHOR_CLEAR_OF_NODE
 
 # The windfall the layout search never optimised for, and which therefore
 # nothing protects. See `test_scenarios.py`.
@@ -187,6 +200,15 @@ def solve_anchors(positions: Dict[str, Point],
     4. The slide stops where the anchor would come within `ANCHOR_CLEAR_OF_NODE`
        of its own endpoints. A lane with no accepted candidate returns `None`
        rather than a bad position -- an infeasible layout must be visible.
+
+    **The one place the mirror is allowed to differ**, spelled out because
+    "keep them identical" would otherwise be a lie: on an infeasible lane this
+    returns `None` so the test fails loudly, while `graph.js` falls back to the
+    midpoint so the numeral still draws. The difference is deliberately
+    confined to that lane -- neither side lets the infeasible result take part
+    in the `placed` list -- so every anchor solved *after* it is still
+    identical on both sides. A future edit that pushes the fallback onto
+    `placed` in `graph.js` would silently shift the rest of the diagram.
 
     Greedy and order-dependent, and deliberately so: a backtracking search would
     be a better solver and a worse *specification*, because a fifty-line search

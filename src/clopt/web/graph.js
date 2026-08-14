@@ -30,9 +30,16 @@ const LANE_GAP = 6;        /* air between a lane's end and the node it meets */
 
 /* The derived terminals sit outside the authored coordinate range, pinned at
  * the horizontal extremes, so a min cut later reads as the S-T partition it is
- * defined to be. */
-const TERMINAL_X = { S: -30, T: 950 };
+ * defined to be.
+ *
+ * Derived from the dataset rather than hardcoded: a fixed pair of x values is
+ * only "the extremes" for a theater as wide as today's, and a wider dataset
+ * would quietly draw its super-source *inside* the graph, where the S-T
+ * partition stops reading as a partition. The clamp keeps both terminals and
+ * their discs inside the viewBox whatever the data does. */
+const TERMINAL_MARGIN = 120;   /* clear air between the graph and a terminal */
 const TERMINAL_Y = 360;
+const VIEWBOX = { left: -60, right: 1000 };
 
 /* The anchor solve's constants. Mirrored in `tests/layout_geometry.py`; see
  * `anchorSolve`. */
@@ -276,10 +283,17 @@ function anchorSolve(edges, positions, crossings) {
 
     /* No feasible point: fall back to the midpoint rather than dropping the
      * numeral. A numeral in a tight spot can be read; a missing one cannot be
-     * noticed. The Python check fails loudly on this case, which is where it
-     * should be caught -- long before a class. */
+     * noticed. The Python mirror returns `None` here instead, because a test
+     * must fail loudly on this case -- which is where it should be caught,
+     * long before a class.
+     *
+     * That is the ONE place the two implementations differ, and the divergence
+     * is confined to the lane itself on purpose: the fallback midpoint is NOT
+     * pushed onto `placed`, exactly as the Python skips it. Were it pushed,
+     * one infeasible lane would shift every anchor solved after it and the two
+     * implementations would disagree about the whole rest of the diagram. */
     anchors.set(edge.id, chosen || midpoint);
-    placed.push(anchors.get(edge.id));
+    if (chosen !== null) placed.push(chosen);
   }
   return anchors;
 }
@@ -348,14 +362,16 @@ export function buildGraph(svg, payload) {
   frozen.directed = directedLookup(network.edges);
   frozen.terminalLinks = terminalLinks(network.nodes);
 
-  for (const [role, x] of Object.entries(TERMINAL_X)) {
-    positions.set(role, { x, y: TERMINAL_Y });
-  }
+  const xs = [...positions.values()].map((point) => point.x);
+  const pad = TERMINAL_R + LANE_GAP;
+  const clamp = (x) => Math.min(Math.max(x, VIEWBOX.left + pad), VIEWBOX.right - pad);
+  positions.set("S", { x: clamp(Math.min(...xs) - TERMINAL_MARGIN), y: TERMINAL_Y });
+  positions.set("T", { x: clamp(Math.max(...xs) + TERMINAL_MARGIN), y: TERMINAL_Y });
   frozen.positions = positions;
 
   /* -- lane tier ----------------------------------------------------------- */
   for (const link of frozen.terminalLinks) {
-    const line = element("line", { class: "synth", "marker-end": "url(#arrowhead)" });
+    const line = element("line", { class: "synth" });
     tiers.lanes.appendChild(line);
     handles.terminals.set(`${link.role}:${link.nodeId}`, { line, link });
   }
@@ -363,7 +379,7 @@ export function buildGraph(svg, payload) {
   const ledgerRows = document.getElementById("ledger-rows");
   for (const edge of network.edges) {
     const group = element("g", { class: "lane-group", "data-edge": edge.id });
-    const line = element("line", { class: "lane", "marker-end": "url(#arrowhead)" });
+    const line = element("line", { class: "lane" });
     const glyphOne = element("line", { class: "removed-glyph" });
     const glyphTwo = element("line", { class: "removed-glyph" });
     group.appendChild(line);
@@ -390,7 +406,6 @@ export function buildGraph(svg, payload) {
       group,
       line,
       glyphs: [glyphOne, glyphTwo],
-      anchor: frozen.anchors.get(edge.id),
       canvasLabel: null,     /* filled below, on the annotation tier */
       ledgerRow: row,
       casingStubs: [],
@@ -442,17 +457,23 @@ export function buildGraph(svg, payload) {
 
   for (const edge of network.edges) {
     const bundle = handles.edges.get(edge.id);
+    /* Two texts share one anchor and one plate: the lane's static statistics
+     * (capacity, cost, risk) and the flow the solver put on it. They are
+     * separate elements rather than one because the layers that show them are
+     * switched independently. `flow` gets its content in a later ticket; the
+     * element exists from here so that nothing structural changes when it
+     * does. */
     const plate = element("rect", { class: "anchor-plate" });
-    const label = element("text", { class: "lane-label" });
+    const stats = element("text", { class: "lane-label" });
     const flow = element("text", { class: "anchor-label" });
     marks.appendChild(plate);
-    marks.appendChild(label);
+    marks.appendChild(stats);
     marks.appendChild(flow);
-    bundle.canvasLabel = { plate, label, flow };
+    bundle.canvasLabel = { plate, stats, flow };
   }
 
   return handles;
 }
 
 /** Geometry the render pass needs and must not recompute differently. */
-export const geometry = { NODE_R, TERMINAL_R, LANE_GAP, distance };
+export const geometry = { NODE_R, TERMINAL_R, LANE_GAP };

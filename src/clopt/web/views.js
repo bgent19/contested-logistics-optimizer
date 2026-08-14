@@ -34,10 +34,16 @@ const LAYER_IDS = LAYERS.map((layer) => layer.id);
  */
 export const VIEWS = [
   {
+    /* The pristine opening screen, and it carries ZERO marks: bare lanes, the
+     * nodes, and the derived machinery. Lane numerals have a permanent place
+     * to sit from the first paint -- the anchors are solved and the elements
+     * exist -- but the place is empty until the instructor asks for it. This
+     * is the screen the room sees while the problem is being stated, so
+     * anything drawn over a lane here is something nobody asked for yet. */
     id: "theater",
     label: "Theater",
     hint: "The pristine network, as authored",
-    layers: ["lanelabels", "synth"],
+    layers: ["synth"],
   },
   {
     id: "throughput",

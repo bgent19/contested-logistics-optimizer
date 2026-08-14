@@ -71,14 +71,18 @@ export function edgeChanges(current = state) {
 }
 
 /**
- * Whether a lane is removed under the active threat.
+ * Whether a lane is removed, given the change map `edgeChanges` returned.
+ *
+ * Takes the map rather than fetching it, so a render pass over twelve lanes
+ * builds it once instead of twelve times -- and, more to the point, so every
+ * lane in one pass is judged against the same map.
  *
  * Removal is a style, not a deletion: the DOM is built from the pristine
  * network, so a cut lane keeps its element and gains a class. A lane that
  * vanishes teaches less than a lane visibly struck out -- and the server says
  * a lane is gone by zeroing its capacity, so that is what is read here.
  */
-export function isRemoved(edgeId, current = state) {
-  const change = edgeChanges(current).get(edgeId);
+export function isRemoved(changes, edgeId) {
+  const change = changes.get(edgeId);
   return Boolean(change) && change.cap === 0;
 }
