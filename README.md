@@ -305,6 +305,17 @@ make api      # uvicorn clopt.api:app  ->  http://localhost:8000/docs
 | `GET /naive?lambdas=&threat=` | Day 1's unbuildable plan, complete, one per lambda |
 | `GET /maxflow?threat=` | max throughput + min-cut certificate |
 | `GET /interdict?budget=&method=&threat=` | adversary's cheapest blockade |
+| `GET /interdict?ladder=true&threat=` | Day 4's ladder: rungs `k=1..K`, both methods at every rung, `diverges` per rung |
+
+Ladder mode is the Day 4 walk. It runs the exhaustive optimum *and* the greedy
+heuristic at every `k` -- both requested explicitly, because `method=auto`
+silently picks exhaustive on any classroom-sized network and would draw the
+same answer in both columns -- and stops at the first `k` where **both** reach
+zero throughput. Each rung carries a server-computed `diverges` flag comparing
+the two removed *sets*: on `dataset=greedy_trap` the k=3 rung reads zero on
+both tracks and still diverges, because greedy spent three lanes to buy what
+the optimum bought with two. `budget=` is a ceiling on `k` here, not the
+answer; a ladder cut short by it reports `terminated: false`.
 
 One server serves every theater. Each endpoint above also takes an optional
 `dataset=` parameter naming a dataset id -- the **filename stem** of a file in

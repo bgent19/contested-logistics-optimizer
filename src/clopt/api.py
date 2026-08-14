@@ -40,7 +40,10 @@ from .routing import (
 from .scenario import Scenario
 from .solver import AllocationResult, solve_allocation, pareto_sweep
 from .throughput import max_flow_min_cut
-from .interdiction import budget_interdiction, min_cut_interdiction
+from .interdiction import (
+   InterdictionTrack, LadderRung,
+   budget_interdiction, interdiction_ladder, min_cut_interdiction,
+)
 
 app = FastAPI(
    title="Contested-Logistics Routing Optimizer",
@@ -538,15 +541,78 @@ def maxflow(
    }
 
 
+def _track_out(track: InterdictionTrack) -> dict:
+   return {
+      "method": track.method,
+      "removed": [{"src": s, "dst": d} for s, d in track.removed],
+      "residual_throughput": track.residual_throughput,
+      # `searched` and `skipped`, never "subsets considered". The space's size
+      # is the rung's `subsets_total`; saying a greedy track "considered" it is
+      # a claim about work greedy declined to do, and the declining is the
+      # lesson. See `interdiction.BudgetInterdiction`.
+      "searched": track.searched,
+      "skipped": track.skipped,
+   }
+
+
+def _rung_out(rung: LadderRung) -> dict:
+   return {
+      "k": rung.k,
+      "k_through": rung.k_through,
+      "exhaustive": _track_out(rung.exhaustive),
+      "greedy": _track_out(rung.greedy),
+      "subsets_total": rung.subsets_total,
+      "diverges": rung.diverges,
+   }
+
+
 @app.get("/interdict")
 def interdict(
    budget: Optional[int] = Query(None, ge=1,
-                                 description="Max lanes to remove; omit for min-cut interdiction."),
+                                 description="Max lanes to remove; omit for min-cut interdiction. "
+                                             "In ladder mode, the ceiling on k."),
    method: str = Query("auto", pattern="^(auto|exhaustive|greedy)$"),
+   ladder: bool = Query(False,
+                        description="Walk k=1.. with both methods at every rung "
+                                    "(Day 4). Ignores `method`; see below."),
    threat: Optional[str] = Query(None),
    dataset: Optional[str] = DATASET_QUERY,
 ) -> dict:
+   """Three modes, and the third is the teaching one.
+
+   No `budget`: min-cut interdiction. With `budget`: one search at one k, the
+   shape the CLI prints -- unchanged, and it stays unchanged. With
+   `ladder=true`: rungs k=1.. carrying *both* methods, terminating where both
+   reach zero, each rung flagged `diverges` by the server.
+
+   The ladder is one call per dataset rather than the 2 x K x datasets the
+   frontend would otherwise issue at boot, and -- the reason it lives on the
+   server at all -- termination and the identical-rung collapse become facts a
+   test can pin instead of logic in a render pass.
+   """
    net = _net_for(dataset, threat)
+   if ladder:
+      if method != "auto":
+         # Not ignored: a ladder runs both methods by definition, so there is
+         # nothing for `method` to select, and silently accepting it would let
+         # a caller believe it had asked for a one-method ladder and got one.
+         raise HTTPException(
+            status_code=400,
+            detail="ladder mode runs both methods; drop the `method` parameter.",
+         )
+      # `budget` is the ceiling here, not the answer. Omitted, the core's
+      # default guard applies and the data decides where the ladder stops.
+      kwargs = {} if budget is None else {"max_budget": budget}
+      result = interdiction_ladder(net, **kwargs)
+      return {
+         "mode": "ladder",
+         "baseline_throughput": result.baseline_throughput,
+         "min_cut_capacity": result.min_cut_capacity,
+         # False when the ceiling cut the ladder short: a truncated ladder must
+         # not be read as "and then the network was severed".
+         "terminated": result.terminated,
+         "rungs": [_rung_out(r) for r in result.rungs],
+      }
    if budget is None:
       inter = min_cut_interdiction(net)
       return {
