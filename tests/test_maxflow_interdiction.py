@@ -7,6 +7,8 @@ against the published notes.
 
 import os
 
+from conftest import edge_order
+
 from clopt.maxflow import EdmondsKarp
 from clopt.scenario import load_scenario
 from clopt.throughput import max_flow_min_cut
@@ -135,3 +137,23 @@ def test_textbook_trace_demonstrates_cancellation():
 
     # Edmonds-Karp's non-decreasing path length, on screen rather than asserted.
     assert [len(s.path) - 1 for s in res.trace] == [3, 3, 5]
+
+
+def test_textbook_edge_order_is_the_cancelling_one():
+    """The ordering condition itself, named, so a reordering fails by name.
+
+    The test above already catches a reordering, but it fails as a wrong
+    bottleneck list, which reads like the solver regressed rather than like
+    the file was tidied. Half of the 5040 orderings collapse the trace to two
+    iterations and restore exactly the bug this dataset replaced; grouping the
+    lanes by source node -- the obvious tidy-up -- is one of them. This asserts
+    the two precedences that select the cancelling trace.
+    """
+    order = edge_order(TEXTBOOK)
+
+    assert order.index(("s", "A")) < order.index(("s", "C")), (
+        "s->A must be listed before s->C, or iteration 1 takes the wrong path"
+    )
+    assert order.index(("A", "B")) < order.index(("A", "D")), (
+        "A->B must be listed before A->D, or nothing is ever cancelled"
+    )
