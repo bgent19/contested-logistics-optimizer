@@ -77,14 +77,14 @@ installed at all.
 
 ```bash
 # Option A: Docker (builds, runs the tests, then serves the API)
-docker compose up            # then open http://localhost:8000/docs
+docker compose up            # then open http://localhost:8000/
 
 # Option B: Make
 make install                 # editable install with API + test extras
 make test                    # run the suite
 make run                     # baseline allocation on the sample theater
 make demo                    # guided tour: baseline, risk-averse, sweep, disruption
-make api                     # serve REST API at http://localhost:8000/docs
+make api                     # frontend at http://localhost:8000/, API docs at /docs
 
 # Option C: nothing installed, just Python
 PYTHONPATH=src python3 -m clopt.cli allocate --data data/theater_sample.json
@@ -288,6 +288,40 @@ clopt interdict --data data/theater_sample.json --budget 2 --method exhaustive
 ```
 
 (If you haven't `pip install`ed, prefix with `PYTHONPATH=src python3 -m clopt.cli`.)
+
+## The teaching frontend
+
+```bash
+make api      # http://localhost:8000/
+```
+
+`make api` is still the only command. There is **no build step, no Node and no
+npm** anywhere in this repo: the frontend is hand-written SVG and native ES
+modules, served as static files from inside the installed Python package, so a
+`pip install` of this repo gets it with nothing extra to run. The API's
+interactive docs remain at `/docs`.
+
+The theater draws at the coordinates authored in `data/*.json`, with the
+super-source and super-sink derived in the browser and pinned at the left and
+right extremes. The side panel carries the dataset menu, the three views and
+the layer toggles.
+
+Two consequences worth knowing before class:
+
+- **Editing the assets needs a hard refresh.** `uvicorn --reload` watches Python
+  and not static files, so a change under `src/clopt/web/` will not appear on a
+  server restart alone.
+- **Retuning the picture for a projector is one file.** Every appearance value
+  -- colour, weight, dash, opacity, type size -- lives in the `:root` token
+  block at the top of `src/clopt/web/style.css`. JavaScript sets geometry, text
+  and classes, and never an appearance value.
+
+The frontend is verified from Python or not at all. `tests/test_web_assets.py`
+checks that no asset reaches off the machine, that every `var(--token)` has a
+definition, and that canvas type clears 2% of the `viewBox` height;
+`tests/test_scenarios.py` checks the layout clearances and the crossing-angle
+floor over every dataset in `data/`. Nothing asserts that the SVG rendered --
+that is eyeballed, and there is deliberately no JavaScript test runner.
 
 ## REST API
 
