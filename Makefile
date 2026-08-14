@@ -4,7 +4,7 @@
 #     make install   # editable install with API + dev extras
 #     make test      # run the test suite
 #     make run       # baseline allocation on the sample theater
-#     make api       # serve the REST API at http://localhost:8000/docs
+#     make api       # frontend at http://localhost:8000/, API docs at /docs
 
 PYTHON ?= python3
 DATA   ?= data/theater_sample.json
@@ -45,6 +45,9 @@ demo:
 sweep:
 	PYTHONPATH=src $(PYTHON) -m clopt.cli sweep --data $(DATA)
 
+# Serves the teaching frontend at / and the API (docs at /docs) from one
+# process. Note that --reload does not watch the static assets under
+# src/clopt/web -- editing those needs a hard refresh, not a restart.
 api:
 	PYTHONPATH=src CLOPT_DATA=$(DATA) $(PYTHON) -m uvicorn clopt.api:app --reload --host 0.0.0.0 --port 8000
 

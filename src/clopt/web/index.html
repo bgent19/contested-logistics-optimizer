@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<!--
+  The classroom teaching frontend.
+
+  Zero dependencies: hand-written SVG, native ES modules, no build step, no npm,
+  no CDN, no web fonts, no vendored library. The usual reason to reach for a
+  graph library is layout, and layout here is already solved by authored-and-
+  frozen coordinates in `data/*.json` -- what remains is drawing circles, lines
+  and text at coordinates already in hand.
+
+  Edit-loop note: uvicorn's `--reload` does not watch static files, so a change
+  to anything in this directory needs a hard refresh, not a server restart.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contested-Logistics Theater</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <div id="canvas">
+      <!--
+        One <svg>, one fixed viewBox, uniform scale. The x origin is negative to
+        leave room for the derived super-source pinned outside the authored
+        coordinate range. Everything inside is authored in diagram units and
+        scales together, which is what makes a gutter that clears at authoring
+        time clear at every projector size.
+      -->
+      <svg id="theater" viewBox="-60 0 1060 720"
+           preserveAspectRatio="xMidYMid meet"
+           xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="arrowhead" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M0,1 L10,5 L0,9 z" fill="context-stroke"/>
+          </marker>
+        </defs>
+
+        <!--
+          Paint order is tiered, and the tiering is a rule: the annotation tier
+          always paints over the lane tier, and ordering *within* a tier is
+          arbitrary. Stated here so nobody later tidies these four groups into
+          one flat list. The JSON edges array is already load-bearing for two
+          separate reasons; paint order is deliberately not a third, because two
+          bare lanes are the same hue and weight and which is on top is not a
+          fact about the graph.
+        -->
+        <g id="tier-territory"></g>
+        <g id="tier-lanes"></g>
+        <g id="tier-nodes"></g>
+        <g id="tier-annotation"></g>
+      </svg>
+    </div>
+
+    <aside id="panel">
+      <h1 id="scenario-name">&nbsp;</h1>
+      <p class="subtitle" id="scenario-description">&nbsp;</p>
+
+      <h2>Dataset</h2>
+      <div class="controls">
+        <select id="dataset-select" aria-label="Dataset"></select>
+      </div>
+
+      <h2>View</h2>
+      <div class="controls" id="view-controls"></div>
+
+      <h2>Layers</h2>
+      <div class="controls" id="layer-controls"></div>
+
+      <h2>Lanes</h2>
+      <table id="ledger">
+        <thead>
+          <tr><th>Lane</th><th>From</th><th>To</th></tr>
+        </thead>
+        <!--
+          Rows are built by graph.js in the same pass as the lanes, because a
+          row and a lane are the same domain object. That makes row-to-lane
+          identity structural rather than a lookup.
+        -->
+        <tbody id="ledger-rows"></tbody>
+      </table>
+    </aside>
+  </div>
+
+  <!--
+    Boot, inline and deliberately so. The module inventory is fixed at seven by
+    the spec, and a `main.js` would be an eighth chosen by the implementer. This
+    file already owns the view switcher, the layer toggles and the panel, so the
+    handful of lines that wire those controls to the state mutators belong to
+    it. Nothing here reaches for an endpoint or an appearance value: it fetches
+    through api.js, mutates through state.js, and repaints through render.js.
+  -->
+  <script type="module">
+    import { fetchDatasets, fetchScenario } from "./api.js";
+    import { state, setScenario, setDataset, setView, toggleLayer } from "./state.js";
+    import { buildGraph } from "./graph.js";
+    import { render } from "./render.js";
+    import { VIEWS, LAYERS, applyLayerClasses } from "./views.js";
+
+    const svg = document.getElementById("theater");
+
+    function repaint() {
+      applyLayerClasses(document.documentElement, state.layers);
+      render(state);
+    }
+
+    function buildControls() {
+      const views = document.getElementById("view-controls");
+      for (const view of VIEWS) {
+        const button = document.createElement("button");
+        button.textContent = view.label;
+        button.title = view.hint;
+        button.dataset.view = view.id;
+        button.addEventListener("click", () => {
+          setView(view.id);
+          syncControls();
+          repaint();
+        });
+        views.appendChild(button);
+      }
+
+      const layers = document.getElementById("layer-controls");
+      for (const layer of LAYERS) {
+        const button = document.createElement("button");
+        button.textContent = layer.label;
+        button.title = layer.hint;
+        button.dataset.layer = layer.id;
+        button.addEventListener("click", () => {
+          toggleLayer(layer.id);
+          syncControls();
+          repaint();
+        });
+        layers.appendChild(button);
+      }
+    }
+
+    function syncControls() {
+      for (const button of document.querySelectorAll("[data-view]")) {
+        button.setAttribute("aria-pressed", String(button.dataset.view === state.view));
+      }
+      for (const button of document.querySelectorAll("[data-layer]")) {
+        button.setAttribute("aria-pressed", String(state.layers.has(button.dataset.layer)));
+      }
+    }
+
+    async function load(datasetId) {
+      const payload = await fetchScenario(datasetId);
+      setScenario(payload);
+      // The DOM is rebuilt exactly once per dataset, and never again for that
+      // dataset. Every later state change is a render pass over elements that
+      // already exist.
+      buildGraph(svg, payload);
+      document.getElementById("scenario-name").textContent = payload.name;
+      document.getElementById("scenario-description").textContent = payload.description;
+      syncControls();
+      repaint();
+    }
+
+    async function boot() {
+      const select = document.getElementById("dataset-select");
+      const datasets = await fetchDatasets();
+      for (const dataset of datasets) {
+        const option = document.createElement("option");
+        option.value = dataset.id;
+        option.textContent = dataset.name;
+        select.appendChild(option);
+      }
+      select.addEventListener("change", () => {
+        setDataset(select.value);
+        load(select.value);
+      });
+
+      buildControls();
+      setView(VIEWS[0].id);
+      await load(datasets.length ? datasets[0].id : undefined);
+    }
+
+    boot();
+  </script>
+</body>
+</html>
