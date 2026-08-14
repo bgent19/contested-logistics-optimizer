@@ -299,6 +299,137 @@ def test_only_api_js_knows_an_endpoint_url(assets):
         )
 
 
+# ---- the side panel (issue #40) ---------------------------------------------
+# The panel is four fixed slots, built once per dataset and thereafter mutated
+# only by class and text content. Three of its apparent content shapes were
+# never components: the cut's certifying lane list and the interdicted subset
+# are *subsets of the lanes*, so they are row states on the one ledger row --
+# never separate DOM. Otherwise the same lane sits in the panel twice, in two
+# renderings that can disagree.
+ROW_STATES = ["in-cut", "removed", "violating", "on-path", "hot"]
+
+
+def test_no_asset_writes_markup_as_a_string(assets):
+    """No `innerHTML` after build, in any slot.
+
+    The panel's whole discipline rests on this. A slot rebuilt from a string
+    loses its handles, so the row that a lane's bundle points at stops being
+    the row on screen -- and the two only disagree once some state is set,
+    which is to say in front of a room rather than on the laptop.
+    """
+    forbidden = ["innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"]
+    for name, text in assets.items():
+        code = COMMENT.sub(" ", text)
+        for token in forbidden:
+            assert token not in code, (
+                f"{name}: uses {token}. Every slot is built once with "
+                f"createElement and mutated only by class and textContent."
+            )
+
+
+def test_every_row_state_is_a_class_on_the_one_ledger_row(assets, stylesheet):
+    """The five row states exist as classes, and something computes each.
+
+    Checked from both ends on purpose. A state painted by the stylesheet but
+    never computed is a rule that has never fired; a state computed but never
+    painted is a class that shows nothing. Either way the lane subset it was
+    meant to certify is invisible, and the headline number it certifies stands
+    unsupported.
+
+    The list is restated here rather than read out of `state.js`: a test that
+    imported the list under review could not catch it losing a member.
+    """
+    projection = assets["state.js"]
+    for state in ROW_STATES:
+        assert f".{state}" in stylesheet, (
+            f"style.css paints no `.{state}` row state"
+        )
+        assert f'"{state}"' in projection, (
+            f"state.js never computes the `{state}` flag, so the lanes that "
+            f"justify its headline number are never marked"
+        )
+
+
+def test_every_row_state_has_a_tick_token(stylesheet):
+    defined = _defined_tokens(stylesheet)
+    for state in ROW_STATES:
+        assert f"--panel-tick-{state}" in defined, (
+            f"row state `{state}` has no --panel-tick-{state}; its colour would "
+            f"have to come from somewhere outside the token block"
+        )
+
+
+def _colour_tokens(stylesheet):
+    """Every `:root` token whose value is a hex colour, as `(r, g, b)`."""
+    match = re.search(r":root\s*\{(.*?)\}", stylesheet, re.DOTALL)
+    values = {}
+    for found in re.finditer(r"(--[a-z0-9-]+)\s*:\s*#([0-9a-f]{6})\s*;",
+                             match.group(1), re.I):
+        raw = found.group(2)
+        values[found.group(1)] = tuple(int(raw[i:i + 2], 16) for i in (0, 2, 4))
+    return values
+
+
+def _saturation(rgb):
+    """HSL saturation, 0..1."""
+    top, bottom = max(rgb) / 255, min(rgb) / 255
+    if top == bottom:
+        return 0.0
+    lightness = (top + bottom) / 2
+    span = top - bottom
+    return span / (2 - top - bottom) if lightness > 0.5 else span / (top + bottom)
+
+
+# The canvas's categorical roles: the hues that carry meaning inside the SVG.
+# The panel is the instructor's dashboard, but it is still visible on a
+# mirrored display, so it may spend none of these.
+CANVAS_CATEGORICAL = ["--node-supply", "--node-demand"]
+
+
+def test_row_state_ticks_spend_none_of_the_canvas_categorical_roles(stylesheet):
+    """Tick colour is the canvas hue at LOW CHROMA, not the canvas hue.
+
+    A relationship rather than a value, and deliberately so: the palette is
+    expected to be retuned against the real projector, so a test on the numbers
+    themselves would train the instructor to edit the test. `less saturated
+    than every categorical role on the canvas` survives any retune that keeps
+    the decision.
+    """
+    colours = _colour_tokens(stylesheet)
+    ticks = {n: v for n, v in colours.items() if n.startswith("--panel-tick-")}
+    assert ticks, "no --panel-tick-* token found -- this would pass vacuously"
+
+    canvas = {n: colours[n] for n in CANVAS_CATEGORICAL if n in colours}
+    assert canvas, f"none of {CANVAS_CATEGORICAL} is defined to compare against"
+    ceiling = min(_saturation(v) for v in canvas.values())
+
+    for name, value in sorted(ticks.items()):
+        assert value not in canvas.values(), (
+            f"{name} is exactly a canvas categorical hue; the panel would be "
+            f"spending a role the diagram needs"
+        )
+        assert _saturation(value) < ceiling, (
+            f"{name} is at saturation {_saturation(value):.2f}, at or above "
+            f"the canvas's least-saturated categorical role ({ceiling:.2f}). "
+            f"The tick is a low-chroma echo, not a second use of the hue."
+        )
+
+
+def test_the_ledger_carries_no_per_lane_delta_column(assets):
+    """One headline pair, never a per-lane delta -- in the ledger or on the canvas.
+
+    The two states are never simultaneously visible by design, so a per-lane
+    before/after puts a number from the invisible state back on screen: the
+    rejected ghost overlay re-entering through the panel's door.
+    """
+    for name in ("graph.js", "render.js", "index.html"):
+        code = COMMENT.sub(" ", assets[name])
+        assert "Δ" not in code, (
+            f"{name}: contains a delta glyph outside a comment. A/B deltas are "
+            f"one headline pair the instructor can say out loud, not twelve."
+        )
+
+
 def test_no_javascript_test_runner_is_introduced():
     """The zero-dependency posture, asserted rather than assumed.
 

@@ -57,6 +57,17 @@
       <h1 id="scenario-name">&nbsp;</h1>
       <p class="subtitle" id="scenario-description">&nbsp;</p>
 
+      <!--
+        The headline. Its cells are built by graph.js in the topology pass and
+        thereafter written only through textContent, so the slot a number sits
+        in is fixed for the whole unit: a value the instructor read on the last
+        beat is in the same place on this one.
+      -->
+      <div id="headline">
+        <div id="headline-stats"></div>
+        <p id="headline-delta"></p>
+      </div>
+
       <h2>Dataset</h2>
       <div class="controls">
         <select id="dataset-select" aria-label="Dataset"></select>
@@ -69,15 +80,21 @@
       <div class="controls" id="layer-controls"></div>
 
       <h2>Lanes</h2>
+      <!--
+        The lane ledger: one row per stored lane, always, in fixed order, so a
+        lane's numbers are in the same place on every beat of all four days and
+        can be read aloud without hunting. The columns, the frame and the rows
+        are all built by graph.js in the same pass as the lanes, because a row
+        and a lane are the same domain object -- which makes row-to-lane
+        identity structural rather than a lookup.
+
+        Clicking a row pins that lane hot until the next beat or `R`. That is
+        the whole of what a pointer may do here: duplicate a keyboard jump, or
+        produce transient emphasis no later state depends on.
+      -->
       <table id="ledger">
-        <thead>
-          <tr><th>Lane</th><th>From</th><th>To</th></tr>
-        </thead>
-        <!--
-          Rows are built by graph.js in the same pass as the lanes, because a
-          row and a lane are the same domain object. That makes row-to-lane
-          identity structural rather than a lookup.
-        -->
+        <colgroup id="ledger-cols"></colgroup>
+        <thead id="ledger-head"></thead>
         <tbody id="ledger-rows"></tbody>
       </table>
     </aside>
@@ -93,7 +110,8 @@
   -->
   <script type="module">
     import { fetchDatasets, fetchScenario } from "./api.js";
-    import { state, setScenario, setDataset, setView, toggleLayer } from "./state.js";
+    import { state, setScenario, setDataset, setView, toggleLayer,
+             pinLane, clearPin } from "./state.js";
     import { buildGraph } from "./graph.js";
     import { render } from "./render.js";
     import { VIEWS, LAYERS, applyLayerClasses } from "./views.js";
@@ -135,6 +153,33 @@
       }
     }
 
+    /* One delegated listener on the tbody rather than one per row: the rows are
+     * rebuilt per dataset, and a listener attached per row would have to be
+     * attached from the build pass, putting behaviour in the module that owns
+     * structure. */
+    function bindLedger() {
+      document.getElementById("ledger-rows").addEventListener("click", (event) => {
+        const row = event.target.closest("tr[data-edge]");
+        if (!row) return;
+        pinLane(row.dataset.edge);
+        repaint();
+      });
+    }
+
+    /* The pin lasts until the next beat or `R`. The beat engine and the rest of
+     * the keyboard driver arrive with their own ticket; `R` is here because the
+     * rule the click lives under is that a pointer may never reach a state the
+     * keyboard cannot -- so the key that undoes it has to ship alongside it,
+     * not after it. */
+    function bindKeys() {
+      window.addEventListener("keydown", (event) => {
+        if (event.key !== "r" && event.key !== "R") return;
+        if (event.target.matches("input, select, textarea")) return;
+        clearPin();
+        repaint();
+      });
+    }
+
     function syncControls() {
       for (const button of document.querySelectorAll("[data-view]")) {
         button.setAttribute("aria-pressed", String(button.dataset.view === state.view));
@@ -172,6 +217,8 @@
       select.addEventListener("change", () => load(select.value));
 
       buildControls();
+      bindLedger();
+      bindKeys();
       setView(VIEWS[0].id);
 
       // An empty menu means the server loaded no dataset at all, which it
