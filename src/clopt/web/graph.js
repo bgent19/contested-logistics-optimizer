@@ -602,19 +602,32 @@ export function buildGraph(svg, payload) {
 
   for (const edge of network.edges) {
     const bundle = handles.edges.get(edge.id);
-    /* Two texts share one anchor and one plate: the lane's static statistics
-     * (capacity, cost, risk) and the flow the solver put on it. They are
-     * separate elements rather than one because the layers that show them are
-     * switched independently. `flow` gets its content in a later ticket; the
-     * element exists from here so that nothing structural changes when it
-     * does. */
-    const plate = element("rect", { class: "anchor-plate" });
-    const stats = element("text", { class: "lane-label" });
+    /* Three texts on two rows, sharing one frozen anchor.
+     *
+     * The flow numeral takes the upper row and the lane's statistics the lower
+     * one. `caps` and `costrisk` are two elements on the SAME row rather than
+     * one text carrying all three numbers, because the catalog switches them
+     * independently: Flow & Cut wants a capacity beside its flow and Cost &
+     * Risk wants cost and risk instead, and a combined label put two unasked-for
+     * numbers on screen in both. They are never both on by default -- and if
+     * both are switched on by hand they overlap, which is one of the reasons
+     * all-layers-on is not a legal preset.
+     *
+     * Each row carries its own plate, so a row that is switched off leaves no
+     * unbacked rectangle behind. The whole lot lives in one group per lane so
+     * that the scaffold tier can dim a lane and its numerals together, from one
+     * class write. */
+    const group = element("g", { class: "lane-marks", "data-edge": edge.id });
+    const plateFlow = element("rect", { class: "anchor-plate plate-flow" });
     const flow = element("text", { class: "anchor-label" });
-    marks.appendChild(plate);
-    marks.appendChild(stats);
-    marks.appendChild(flow);
-    bundle.canvasLabel = { plate, stats, flow };
+    const plateStat = element("rect", { class: "anchor-plate plate-stat" });
+    const caps = element("text", { class: "lane-label lane-caps" });
+    const costrisk = element("text", { class: "lane-label lane-costrisk" });
+    for (const part of [plateFlow, flow, plateStat, caps, costrisk]) {
+      group.appendChild(part);
+    }
+    marks.appendChild(group);
+    bundle.canvasLabel = { group, plateFlow, flow, plateStat, caps, costrisk };
   }
 
   return handles;

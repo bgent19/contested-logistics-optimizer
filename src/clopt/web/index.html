@@ -110,17 +110,21 @@
   -->
   <script type="module">
     import { fetchDatasets, fetchScenario } from "./api.js";
-    import { state, setScenario, setDataset, setView, toggleLayer,
-             pinLane, clearPin } from "./state.js";
+    import { state, setScenario, setDataset, setView, toggleLayer, pinLane,
+             stepBeat, stepUnit, jumpToUnit, resetView,
+             resolveBeat } from "./state.js";
     import { buildGraph } from "./graph.js";
     import { render } from "./render.js";
-    import { VIEWS, LAYERS, applyLayerClasses } from "./views.js";
+    import { VIEWS, LAYERS, applyLayerClasses, viewForKey } from "./views.js";
 
     const svg = document.getElementById("theater");
 
     function repaint() {
       applyLayerClasses(document.documentElement, state.layers);
       render(state);
+      // The controls follow the state rather than driving it, so a beat that
+      // overrides a layer lights the same button a click on it would have.
+      syncControls();
     }
 
     function buildControls() {
@@ -132,7 +136,6 @@
         button.dataset.view = view.id;
         button.addEventListener("click", () => {
           setView(view.id);
-          syncControls();
           repaint();
         });
         views.appendChild(button);
@@ -146,7 +149,6 @@
         button.dataset.layer = layer.id;
         button.addEventListener("click", () => {
           toggleLayer(layer.id);
-          syncControls();
           repaint();
         });
         layers.appendChild(button);
@@ -166,16 +168,61 @@
       });
     }
 
-    /* The pin lasts until the next beat or `R`. The beat engine and the rest of
-     * the keyboard driver arrive with their own ticket; `R` is here because the
-     * rule the click lives under is that a pointer may never reach a state the
-     * keyboard cannot -- so the key that undoes it has to ship alongside it,
-     * not after it. */
+    /* The keyboard, which is the primary driver -- on-screen controls are
+     * pointer parity and never the other way round.
+     *
+     * ONE TABLE, and it is one table so that the pointer-only rule for layers
+     * is checkable rather than merely agreed: `tests/test_web_assets.py` reads
+     * this block and fails if a layer id or `toggleLayer` appears in it. The
+     * keys stay reserved for the controls used mid-narration.
+     *
+     * `event.code` rather than `event.key` throughout. The view jumps were
+     * chosen for being bottom-row, one-handed and modifier-free, which is a
+     * fact about where the key IS -- a layout that prints something else on the
+     * cap should still drive the tool.
+     *
+     * `PageDown` steps FORWARD and `PageUp` back, which is the way round a
+     * presenter remote sends them -- the alias exists so a remote drives the
+     * tool with no configuration, so the remote decides the direction, not the
+     * order the two keys are written down in.
+     *
+     * `ArrowDown` walks to the next coarse unit and `ArrowUp` to the previous
+     * one, matching every other transport control: down the list is forward. */
+    const KEY_ACTIONS = {
+      ArrowRight: () => stepBeat(1),
+      ArrowLeft:  () => stepBeat(-1),
+      PageDown:   () => stepBeat(1),
+      PageUp:     () => stepBeat(-1),
+      ArrowDown:  () => stepUnit(1),
+      ArrowUp:    () => stepUnit(-1),
+      KeyR:       () => resetView(),
+    };
+
+    const DIGIT = /^Digit([1-9])$/;
+
     function bindKeys() {
       window.addEventListener("keydown", (event) => {
-        if (event.key !== "r" && event.key !== "R") return;
+        // Modified keystrokes belong to the browser. Taking Ctrl-R would cost
+        // the instructor the reload that recovers from anything this page gets
+        // wrong, in exchange for a key `R` already provides.
+        if (event.ctrlKey || event.metaKey || event.altKey) return;
         if (event.target.matches("input, select, textarea")) return;
-        clearPin();
+
+        const digit = DIGIT.exec(event.code);
+        const view = viewForKey(event.code);
+        const action = KEY_ACTIONS[event.code];
+        // Digits jump straight to a coarse unit, 1-based as the instructor says
+        // it out loud. A digit above the view's unit count is a silent no-op --
+        // the mutators decline it rather than clamping, because a clamp moves
+        // the picture somewhere nobody asked for, mid-sentence.
+        if (digit) jumpToUnit(Number(digit[1]));
+        else if (view) setView(view);
+        else if (action) action();
+        else return;
+
+        // Only after the key is one of ours: the arrows and the page keys
+        // otherwise scroll the panel out from under the instructor.
+        event.preventDefault();
         repaint();
       });
     }
@@ -201,7 +248,10 @@
       buildGraph(svg, payload);
       document.getElementById("scenario-name").textContent = payload.name;
       document.getElementById("scenario-description").textContent = payload.description;
-      syncControls();
+      // The beat is re-resolved against the new dataset rather than reset: the
+      // marks were cleared with the old theater's edge ids, and the current
+      // beat is the only thing that knows what should be marked instead.
+      resolveBeat();
       repaint();
     }
 
