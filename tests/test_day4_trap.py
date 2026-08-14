@@ -13,8 +13,9 @@ baseline 140, exhaustive reaching 0 at k=2, greedy stalling at 30 -- *greedy
 fails when the best blockade isn't where the biggest single lane is*.
 """
 
-import json
 import os
+
+from conftest import edge_order
 
 from clopt.interdiction import budget_interdiction
 from clopt.scenario import load_scenario
@@ -24,16 +25,12 @@ DATA = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
 TRAP = os.path.join(DATA, "greedy_trap.json")
 
 
-def _edge_pairs(path):
-    """The lanes in the order the JSON file lists them, which is load-bearing."""
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    return [(e["src"], e["dst"]) for e in data["network"]["edges"]]
-
-
 def test_trap_is_the_authored_instance():
     net = load_scenario(TRAP).under(None)
     lanes = {(e.src, e.dst): e.cap for e in net.edges}
+    # Count as well as contents: the map below would swallow a duplicated
+    # lane, and a ninth lane changes the instance the numbers were measured on.
+    assert len(net.edges) == 8
     assert lanes == {
         ("s", "A"): 80,
         ("s", "B"): 30,
@@ -62,43 +59,59 @@ def test_trap_baseline_throughput_is_140():
 def test_exhaustive_severs_the_trap_with_two_lanes():
     net = load_scenario(TRAP).under(None)
     res = budget_interdiction(net, budget=2, method="exhaustive")
-    # C->t and D->t are the only lanes into t, so two removals reach zero --
-    # and neither of them is the most damaging single lane.
     assert res.residual_throughput == 0
-    assert len(res.removed) == 2
+    # C->t and D->t, the only two lanes into t. Naming them is the lesson:
+    # the optimal blockade contains neither of the damage-80 lanes greedy
+    # reaches for, so "biggest single lane" is not where the answer lives.
+    assert set(res.removed) == {("C", "t"), ("D", "t")}
+
+
+def test_one_lane_cannot_sever_the_trap():
+    # "0 at k=2" only says something if k=1 falls short, otherwise greedy's
+    # first pick would have been enough and there is no search to justify.
+    net = load_scenario(TRAP).under(None)
+    res = budget_interdiction(net, budget=1, method="exhaustive")
+    assert res.residual_throughput == 60
 
 
 def test_greedy_stalls_at_30_on_the_trap():
     net = load_scenario(TRAP).under(None)
     res = budget_interdiction(net, budget=2, method="greedy")
-    # Greedy opens with a damage-80 lane, which leaves a network whose best
-    # remaining single removal is worth only 30.
+    # Greedy opens with s->A -- one of the three lanes tied at damage 80, and
+    # the first of them in file order. That leaves a network whose best
+    # remaining single removal is worth only 30. Pinning the opening lane
+    # pins the tie-break itself, so the edge-order test below rests on
+    # asserted behaviour rather than on an assumption about the solver.
+    assert res.removed[0] == ("s", "A")
     assert res.residual_throughput == 30
 
 
 def test_greedy_diverges_from_exhaustive_on_the_trap():
-    """The Day 4 sentence, as an assertion: 0 versus 30 at the same budget."""
+    """The Day 4 sentence, as an assertion: greedy strictly worse at equal budget."""
     net = load_scenario(TRAP).under(None)
     exhaustive = budget_interdiction(net, budget=2, method="exhaustive")
     greedy = budget_interdiction(net, budget=2, method="greedy")
 
     assert greedy.residual_throughput > exhaustive.residual_throughput
-    assert (exhaustive.residual_throughput, greedy.residual_throughput) == (0, 30)
 
 
 def test_trap_edge_order_preserves_the_divergence():
     """The JSON edge order is load-bearing, and breaks silently if reordered.
 
     Three lanes tie at damage 80 -- s->A, A->D and D->t -- and greedy's tie
-    break is first-in-file, because `throughput._build` adds lanes in file
-    order and the search keeps the first strict improvement. Opening with
-    s->A or A->D leaves a network greedy can only cut by another 30; opening
-    with D->t leaves C->t as an obvious second cut and greedy reaches 0 too,
-    erasing the lesson. Only 66.7% of the 40,320 orderings survive, and the
-    file still loads and still draws either way, so pin the condition: one of
-    the two upstream damage-80 lanes must precede D->t.
+    break is first-in-file: `throughput._build` adds lanes in file order,
+    `interdiction.budget_interdiction` scans candidates in ascending index
+    order, and the first strict improvement wins. Opening with s->A or A->D
+    leaves a network greedy can only cut by another 30; opening with D->t
+    leaves C->t as an obvious second cut and greedy reaches 0 too, erasing
+    the lesson. A sweep of every ordering puts the survivors at exactly
+    26,880 of 40,320 -- 66.7% -- and the condition below selects that set
+    exactly. The file still loads and still draws either way, so nothing but
+    this assertion would notice.
     """
-    order = _edge_pairs(TRAP)
-    sink_lane = order.index(("D", "t"))
+    order = edge_order(TRAP)
+    sink_lane_at = order.index(("D", "t"))
 
-    assert order.index(("s", "A")) < sink_lane or order.index(("A", "D")) < sink_lane
+    assert (
+        order.index(("s", "A")) < sink_lane_at or order.index(("A", "D")) < sink_lane_at
+    ), "a damage-80 lane upstream of t must be listed before D->t"

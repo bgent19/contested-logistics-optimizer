@@ -118,7 +118,15 @@ def budget_interdiction(
       best_i = None
       best_resid = max_flow_min_cut(work).value
       current = best_resid
-      for i in list(remaining):
+      # Ascending index order, i.e. the order the lanes are listed in the
+      # dataset file, because the first strict improvement below wins the
+      # tie. On `data/greedy_trap.json` three lanes tie at damage 80 and
+      # which one greedy opens with decides whether Day 4 has a divergence
+      # to point at, so this order is a promise to the datasets and not an
+      # implementation detail. Iterating the set directly happens to give
+      # the same order for small contiguous indices; `sorted` means it
+      # still does when the candidate list is sparse.
+      for i in sorted(remaining):
          saved = work.edges[i].cap
          work.edges[i].cap = 0.0
          resid = max_flow_min_cut(work).value

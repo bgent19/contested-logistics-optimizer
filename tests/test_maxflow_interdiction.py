@@ -5,8 +5,9 @@ and Day 3 result (min cut also 7), so a regression is a concrete wrong number
 against the published notes.
 """
 
-import json
 import os
+
+from conftest import edge_order
 
 from clopt.maxflow import EdmondsKarp
 from clopt.scenario import load_scenario
@@ -148,8 +149,7 @@ def test_textbook_edge_order_is_the_cancelling_one():
     lanes by source node -- the obvious tidy-up -- is one of them. This asserts
     the two precedences that select the cancelling trace.
     """
-    with open(TEXTBOOK, "r", encoding="utf-8") as fh:
-        order = [(e["src"], e["dst"]) for e in json.load(fh)["network"]["edges"]]
+    order = edge_order(TEXTBOOK)
 
     assert order.index(("s", "A")) < order.index(("s", "C")), (
         "s->A must be listed before s->C, or iteration 1 takes the wrong path"
