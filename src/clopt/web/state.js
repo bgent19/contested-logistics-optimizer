@@ -26,8 +26,24 @@ export const state = {
   /* Active layer ids, opening on the first view's entry set rather than empty.
    * A blank set here is not a neutral starting point -- it is the one layer
    * state the catalog forbids read from the other end, and the page would open
-   * on a diagram with nothing drawn over it and no beat responsible for that. */
+   * on a diagram with nothing drawn over it and no beat responsible for that.
+   *
+   * DERIVED, not authored: rebuilt on every beat from the view's entry table,
+   * the beat's own overrides and `layerOverrides` below, in that order. Nothing
+   * outside this module may write to it -- see `toggleLayer`. */
   layers: layersForView(VIEWS[0].id),
+
+  /**
+   * The layers the instructor has switched by hand, `{layerId: on}`.
+   *
+   * Only the ones actually touched, so a view's entry table can change under a
+   * running class without the untouched layers being pinned to whatever they
+   * happened to be. Layer toggles are pointer-only and this is what makes them
+   * durable: the resolved set is rebuilt every beat, and without a record of
+   * the hand's intent a toggle would last exactly one keypress. `R` clears it,
+   * and `R` alone.
+   */
+  layerOverrides: new Map(),
   /** Active threat picture name, or `null` for the pristine network. */
   threat: null,
 
@@ -156,6 +172,20 @@ export function spine(viewId = state.view) {
 }
 
 /**
+ * A beat index the given view's spine actually has, by clamping.
+ *
+ * The one place "carry the beat index across, as far as it still goes" is
+ * written down. Every ladder in this application is derived from data -- the
+ * augmentation count, the interdiction rungs, the Pareto detents -- so a spine's
+ * length moves under the instructor whenever the dataset or the threat picture
+ * does, and clamping is what keeps the render pure across that move rather than
+ * leaving the index pointing past the end.
+ */
+function clampToSpine(beat, viewId = state.view) {
+  return Math.min(Math.max(beat, 0), spine(viewId).length - 1);
+}
+
+/**
  * Install a view's whole spine, prefetched and complete.
  *
  * Clamps rather than resets the beat index, so re-installing a spine -- which
@@ -164,17 +194,57 @@ export function spine(viewId = state.view) {
  */
 export function setSpine(viewId, beats) {
   SPINES.set(viewId, beats.length ? beats : ENTRY_SPINE);
-  if (viewId === state.view) setBeat(Math.min(state.beat, spine().length - 1));
+  if (viewId === state.view) setBeat(clampToSpine(state.beat));
+}
+
+/**
+ * The distinct coarse units of a spine, in spine order.
+ *
+ * The coarse controls address units by ORDINAL -- "the third one" -- rather
+ * than by the value in `beat.unit`, which is deliberate and load-bearing. The
+ * instructor says "go back to the second one", and what makes that the second
+ * one is its position in the story, not an integer a view ticket happened to
+ * number from zero. Reading the value directly would silently mis-jump on a
+ * ladder numbered from 1 (an interdiction budget *k* starts at 1, not 0) and
+ * would skip whole digits on a Pareto spine whose detents leave gaps where
+ * duplicate plans collapsed out. Both of those are spines #42-#44 are expected
+ * to build, so the coupling is removed here rather than left as a rule three
+ * later tickets have to remember.
+ */
+function unitValues(viewId = state.view) {
+  return [...new Set(spine(viewId).map((beat) => beat.unit))];
 }
 
 /** How many coarse units the active view's spine has. */
 export function unitCount(viewId = state.view) {
-  return new Set(spine(viewId).map((beat) => beat.unit)).size;
+  return unitValues(viewId).length;
 }
 
-/** The index of the first beat -- beat *a* -- of a coarse unit. */
-function firstBeatOfUnit(unit) {
-  return spine().findIndex((beat) => beat.unit === unit);
+/**
+ * Jump to the *n*th coarse unit's beat *a*, counting from zero, or decline if
+ * the view has no such unit.
+ *
+ * Both coarse controls end here -- the arrows and the digits differ only in how
+ * they name the unit they want. Declining rather than clamping is the shared
+ * half: an out-of-range unit leaves the picture exactly where it was, whether it
+ * was asked for by leaning on an arrow or by mistyping a digit.
+ */
+function setUnitAt(ordinal) {
+  const values = unitValues();
+  if (ordinal < 0 || ordinal >= values.length) return false;
+  return setBeat(spine().findIndex((beat) => beat.unit === values[ordinal]));
+}
+
+/** Which coarse unit, by ordinal, the current beat sits in. */
+function currentUnitOrdinal() {
+  const beat = spine()[state.beat];
+  return beat ? unitValues().indexOf(beat.unit) : -1;
+}
+
+/** The index of the first beat -- beat *a* -- of the unit at an ordinal. */
+function firstBeatOfUnitAt(ordinal) {
+  const values = unitValues();
+  return spine().findIndex((beat) => beat.unit === values[ordinal]);
 }
 
 /**
@@ -185,26 +255,55 @@ function firstBeatOfUnit(unit) {
  * a keypress ago. The pin goes with it -- a click pins a lane hot until the next
  * beat or `R`, and "the next beat" is a promise only this function can keep.
  *
- * Layers are reset to the view's defaults here too, because a view's layer
- * table is its *entry* state and beats drive it from there. The cost, stated:
- * a layer the instructor toggled by hand does not survive the next keypress.
- * That is the same rule read from the other end -- a beat renders identically
- * however it was reached, including "reached after fiddling with the layers".
+ * Called on every beat change, and also by the page after a dataset is built:
+ * the marks were cleared along with the old theater's edge ids, and the current
+ * beat is the only thing that knows what should be marked instead.
  *
- * `seed` is the one exception, and it exists for exactly one caller: returning
- * to a view restores the layer set it was left holding, and the beat's own
- * overrides are then re-applied on top of that rather than in place of it.
+ * **Layers are rebuilt, not preserved, and the order of the three sources is
+ * the decision.** The view's entry table goes down first, because a view's
+ * layer table is its entry state and not an invariant; the beat overrides it,
+ * because beats drive layer state as the story advances; and the instructor's
+ * own toggles go on top, because a hand on the pointer is the most recent
+ * authority in the room.
+ *
+ * Rebuilding from those three every time is what keeps a beat idempotent
+ * *including its layers* -- a leftover layer from the beat before would make
+ * the picture depend on the route taken to it. But rebuilding from the entry
+ * table ALONE would destroy the hand toggles on the very next keypress, and the
+ * cross-day mashup they exist for -- Day 3's cut over Day 4's interdicted
+ * network -- is the strongest moment in the unit. The spec spends that mashup
+ * on `R` and on nothing else, so `R` is the only thing here that clears
+ * `layerOverrides`.
  */
-export function resolveBeat(seed) {
+export function resolveBeat() {
   clearPin();
   for (const set of Object.values(state.marks)) set.clear();
   state.throughput = null;
   state.cut = null;
   state.delta = null;
-  state.layers = seed ? new Set(seed) : layersForView(state.view);
+  state.layers = layersForView(state.view);
 
   const beat = spine()[state.beat];
   if (beat && beat.apply) beat.apply(state);
+
+  /* What the beat asked for, kept so a later hand toggle can be re-applied over
+   * it without re-running the beat -- running `apply` again would clear the pin
+   * and the marks, and a click on a lane must survive a click on a layer. */
+  beatLayers = new Set(state.layers);
+  state.layers = withOverrides(beatLayers);
+}
+
+/** The beat's own layer set, before the instructor's toggles go on top. */
+let beatLayers = new Set();
+
+/** A layer set with the hand toggles applied over it. */
+function withOverrides(base) {
+  const resolved = new Set(base);
+  for (const [layerId, on] of state.layerOverrides) {
+    if (on) resolved.add(layerId);
+    else resolved.delete(layerId);
+  }
+  return resolved;
 }
 
 /**
@@ -238,14 +337,12 @@ export function stepBeat(delta) {
  * this one again" without a wasted press.
  */
 export function stepUnit(delta) {
-  const beats = spine();
-  const current = beats[state.beat];
-  if (!current) return false;
-  if (delta < 0 && state.beat !== firstBeatOfUnit(current.unit)) {
-    return setBeat(firstBeatOfUnit(current.unit));
+  const ordinal = currentUnitOrdinal();
+  if (ordinal === -1) return false;
+  if (delta < 0 && state.beat !== firstBeatOfUnitAt(ordinal)) {
+    return setUnitAt(ordinal);
   }
-  const target = firstBeatOfUnit(current.unit + delta);
-  return target === -1 ? false : setBeat(target);
+  return setUnitAt(ordinal + delta);
 }
 
 /**
@@ -256,8 +353,7 @@ export function stepUnit(delta) {
  * somewhere nobody asked for while the instructor is mid-sentence.
  */
 export function jumpToUnit(number) {
-  const target = firstBeatOfUnit(number - 1);
-  return target === -1 ? false : setBeat(target);
+  return setUnitAt(number - 1);
 }
 
 /**
@@ -266,23 +362,33 @@ export function jumpToUnit(number) {
  *
  * Full rather than partial on purpose: a half-reset that leaves four layers
  * burning is not a baseline, and the one key the instructor reaches for when
- * the picture has got away from them has to land somewhere known. Accepted
- * cost, stated where it bites: the cross-day layer mashup is both pointer-only
- * *and* destroyed by `R`.
+ * the picture has got away from them has to land somewhere known.
+ *
+ * THE ONLY THING THAT CLEARS THE HAND TOGGLES, which is where the accepted cost
+ * bites: the cross-day layer mashup is both pointer-only *and* destroyed by
+ * `R`. Every other control leaves it standing, which is what makes it usable at
+ * all -- a mashup that did not survive a beat step could never be built while
+ * the story was moving.
  */
 export function resetView() {
   state.threat = null;
   state.beat = 0;
+  state.layerOverrides.clear();
   resolveBeat();
 }
 
 /**
  * Switch view, restoring everything that view was last left holding.
  *
- * The beat index and the layer set are both remembered, which is the point:
+ * The beat index and the hand toggles are both remembered, which is the point:
  * Flow & Cut stays parked on augmentation 3 while the instructor detours to
  * answer a question. A view seen for the first time enters at beat 0 with its
  * default layers.
+ *
+ * Note what is remembered: the OVERRIDES, not the resolved layer set. The
+ * resolved set is derived from the view table, the beat and the overrides, and
+ * remembering a derived value is how a view comes back showing a layer state
+ * that no longer follows from anything on screen.
  */
 export function setView(viewId) {
   /* Pressing a view's own key is a no-op, not a re-entry. It has to be: the
@@ -290,21 +396,31 @@ export function setView(viewId) {
    * straight back, which is harmless in the middle of a class and is exactly
    * how booting into the first view once left every layer switched off. */
   if (viewId === state.view) return;
-  state.views[state.view] = { beat: state.beat, layers: new Set(state.layers) };
+  state.views[state.view] = {
+    beat: state.beat,
+    overrides: new Map(state.layerOverrides),
+  };
   state.view = viewId;
   const remembered = state.views[viewId];
-  state.beat = remembered ? Math.min(remembered.beat, spine(viewId).length - 1) : 0;
-  /* The marks and the headline numbers are rebuilt from the beat rather than
-   * remembered alongside it -- they are derived, and storing derived state is
-   * how a remembered view comes back showing last week's numbers. Layers are
-   * the exception because a hand toggle is not derivable from anything, so
-   * they are seeded back in and the beat's overrides re-applied over them. */
-  resolveBeat(remembered && remembered.layers);
+  state.beat = remembered ? clampToSpine(remembered.beat, viewId) : 0;
+  state.layerOverrides = remembered ? new Map(remembered.overrides) : new Map();
+  resolveBeat();
 }
 
+/**
+ * Toggle one layer by hand, and remember that the hand did it.
+ *
+ * Recorded as an override rather than written straight onto `state.layers`,
+ * because the layer set is rebuilt from scratch on every beat. Writing the set
+ * directly would put the toggle on screen for exactly as long as it took to
+ * press the next key.
+ *
+ * Re-resolves the layers alone, not the whole beat: a pinned lane must survive
+ * a layer toggle, and the marks have not changed.
+ */
 export function toggleLayer(layerId) {
-  if (state.layers.has(layerId)) state.layers.delete(layerId);
-  else state.layers.add(layerId);
+  state.layerOverrides.set(layerId, !state.layers.has(layerId));
+  state.layers = withOverrides(beatLayers);
 }
 
 /** Switch threat picture. `null` restores the pristine network. */

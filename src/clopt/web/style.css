@@ -156,6 +156,17 @@
   --path:               #f0e442;
   --path-w:             11;
 
+  /* NOT HERE, and deliberately: the promoted reverse arc's adopted `24 15` at
+   * stroke 11. Its duty is 0.615, over the 0.6 authoring cap, and it clears the
+   * pitch floor by 1.008x -- inside the closed form's own ~1% error bar, which
+   * is to say it is a value the rule cannot actually certify. It is also
+   * geometry-specific in a way nothing else here is: it exists only for an arc
+   * promoted to offset 22 with a hollow head and its lane's plain residual
+   * suppressed, all of which lands with Flow & Cut. Shipping the token now
+   * would put a pattern in the catalog that fails this ticket's own duty rule,
+   * with no mark on screen to justify the exception. Recorded here so the
+   * ticket that draws it re-opens the question rather than rediscovering it. */
+
   /* ---- annotation tier ------------------------------------------------- */
   /* The knockout casing at a lane crossing. Painted in the background colour
    * on the annotation tier only -- never lane over lane -- so the pristine

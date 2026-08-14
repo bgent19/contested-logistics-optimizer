@@ -816,6 +816,36 @@ def test_every_dashed_mark_clears_the_presence_floor(stylesheet, smear):
         )
 
 
+def test_every_dashed_mark_clears_the_recorded_stroke_floor(stylesheet):
+    """`w >= 3.16` for any dashed mark, stated as flatly as the spec states it.
+
+    Nearly but not quite the presence floor above: that one divides through each
+    pattern's own duty cycle, where this is the single number an author can
+    check a new mark against without doing any arithmetic. Both are here because
+    the flat one is the rule people will actually apply, and it should fail on
+    the same marks the derived one fails on rather than being a second opinion.
+
+    Same exemption list, for the same recorded reasons. A mark that is allowed
+    to be too faint to read is allowed to be too thin to carry a dash.
+    """
+    numeric = _numeric_tokens(stylesheet)
+    for prefix in sorted(_dash_patterns(stylesheet)):
+        weight = numeric[f"{prefix}-w"]
+        if prefix in FADE_ALLOWED:
+            assert weight < DASHED_W_FLOOR, (
+                f"{prefix} is on the fade list ({FADE_ALLOWED[prefix]}) but is "
+                f"now {weight} units, at or over the {DASHED_W_FLOOR} floor -- "
+                f"the exemption is stale, take it off the list"
+            )
+            continue
+        assert weight >= DASHED_W_FLOOR, (
+            f"{prefix} is a dashed mark at {weight} units, under the "
+            f"{DASHED_W_FLOOR} floor. Below it there is no duty cycle that "
+            f"satisfies pitch and presence at once, so the pattern cannot be "
+            f"rescued by re-pitching it -- the stroke has to get heavier."
+        )
+
+
 def test_the_fade_list_is_closed(stylesheet):
     """Only the two marks on record may fade, and they must still exist."""
     patterns = _dash_patterns(stylesheet)

@@ -54,8 +54,23 @@ const LABEL_GAP = 12;          /* air between a node's disc and its id */
 /* The anchor's two rows, straddling the frozen point rather than starting at
  * it: the flow numeral sits half a row above and the lane's statistics half a
  * row below, so the PAIR is centred on the point the anchor solve certified
- * clear. Hanging both rows downward would put the lower one somewhere the
- * solve never checked. */
+ * clear. Hanging both rows downward would put the lower one somewhere the solve
+ * never checked.
+ *
+ * The one geometry consequence of splitting the lane label in two, and worth
+ * naming because it is a footprint change made outside the ticket that measured
+ * the clearances. Two rows are not optional -- Flow & Cut shows a capacity AND
+ * a flow, so the catalog requires both on screen at once, and the single-row
+ * layout that preceded this drew them on top of each other. The label block now
+ * spans the anchor +/-25 where it spanned +/-12, and 13 is near the minimum
+ * that keeps two 24-unit plates apart.
+ *
+ * That still clears every distance the anchor solve enforces -- 74 from a node
+ * (44 of it air beyond the disc), 74 from another anchor, 44 from a crossing.
+ * What it does exceed is the 14-unit lane half-band, which governs the casing
+ * width rather than the label, so nothing the crossing solve depends on moves.
+ * If the retune against the real projector shows a plate crowding a lane it is
+ * not attached to, this constant is the one to pull, not the anchor solve. */
 const ROW_OFFSET = 13;
 
 /**
