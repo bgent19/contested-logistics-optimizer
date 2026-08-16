@@ -20,7 +20,7 @@ from typing import List
 from .routing import cheapest_path, naive_plan, safest_path
 from .scenario import load_scenario
 from .solver import pareto_sweep, solve_allocation
-from .throughput import max_flow_min_cut
+from .throughput import SUPER_SINK, SUPER_SOURCE, max_flow_min_cut
 from .interdiction import budget_interdiction, min_cut_interdiction
 
 
@@ -227,6 +227,29 @@ def cmd_sweep(args) -> int:
    return 0
 
 
+# The trace filters, which live here rather than in `clopt.throughput`: the
+# super-source and super-sink are an implementation device for turning many
+# hubs and many bases into one s-t problem, and naming them at a terminal
+# would only invite the question. A *drawn* trace needs them -- a route that
+# silently began mid-graph would be worse -- so the payload keeps them and the
+# tidying happens at print time. See `throughput.TraceStep`.
+_SYNTHETIC = (SUPER_SOURCE, SUPER_SINK)
+
+
+def _real_nodes(path: List[str]) -> List[str]:
+   return [n for n in path if n not in _SYNTHETIC]
+
+
+def _real_arcs(arcs):
+   """Arcs between real nodes. Works on (u, v) pairs and (u, v, residual) alike.
+
+   Dropping the terminal arcs also drops every unbounded residual, since they
+   are the only arcs built at infinity -- so nothing downstream has to format
+   a `None`.
+   """
+   return [a for a in arcs if a[0] not in _SYNTHETIC and a[1] not in _SYNTHETIC]
+
+
 def cmd_maxflow(args) -> int:
    _, net = _load(args)
    res = max_flow_min_cut(net, trace=getattr(args, "trace", False))
@@ -246,20 +269,28 @@ def cmd_maxflow(args) -> int:
       print("(BFS picks a fewest-hop augmenting path each round; ties may pick a")
       print(" different-but-valid path than a handout, so this is *a* correct run.)\n")
       for st in res.trace:
-         path = " -> ".join(st.path)
-         terms = ", ".join(f"{c:g}" for c in st.lane_residuals)
+         if st.iteration == 0:
+               # The before-anything snapshot. It exists so a drawn trace has a
+               # "before" to render iteration 1 against; on a terminal it would
+               # be an iteration that never happened.
+               continue
+         path = " -> ".join(_real_nodes(st.path))
+         terms = ", ".join(f"{c:g}" for c in st.lane_residuals if c is not None)
          print(f"Iteration {st.iteration}: {path}")
          print(f"  bottleneck = min({terms}) = {st.bottleneck:g}")
          print(f"  cumulative flow = {st.total_after:g}")
-         if st.used_reverse:
-               arcs = ", ".join(f"{u}->{v}" for u, v in st.used_reverse)
+         used_reverse = _real_arcs(st.used_reverse)
+         forward_residual = _real_arcs(st.forward_residual)
+         reverse_residual = _real_arcs(st.reverse_residual)
+         if used_reverse:
+               arcs = ", ".join(f"{u}->{v}" for u, v in used_reverse)
                print(f"  * uses reverse arc(s) {arcs} to cancel/reroute earlier flow "
                      f"-- this is where the residual graph earns its keep")
-         if st.forward_residual:
-               fwd = "  ".join(f"{u}->{v} {c:g}" for u, v, c in st.forward_residual)
+         if forward_residual:
+               fwd = "  ".join(f"{u}->{v} {c:g}" for u, v, c in forward_residual)
                print(f"  residual (spare capacity): {fwd}")
-         if st.reverse_residual:
-               rev = "  ".join(f"{u}->{v} {c:g}" for u, v, c in st.reverse_residual)
+         if reverse_residual:
+               rev = "  ".join(f"{u}->{v} {c:g}" for u, v, c in reverse_residual)
                print(f"  residual (reverse/cancel): {rev}")
          print()
       print("No augmenting path remains -> flow is maximum.\n")
