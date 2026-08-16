@@ -42,7 +42,7 @@ from .routing import (
 )
 from .scenario import Scenario
 from .solver import AllocationResult, solve_allocation, pareto_sweep
-from .throughput import max_flow_min_cut
+from .throughput import TraceStep, max_flow_min_cut
 from .interdiction import (
    InterdictionTrack, LadderRung,
    budget_interdiction, interdiction_ladder, min_cut_interdiction,
@@ -225,6 +225,94 @@ class NaivePlanRow(BaseModel):
    sources: List[SourceLoadOut]    # every supply node, idle ones included
    notional_cost: float
    unserved: float
+
+
+class CutLaneOut(BaseModel):
+   """One lane of the witness cut -- the Day 3 certificate."""
+
+   src: str
+   dst: str
+   capacity: float
+
+
+class ResidualArcOut(BaseModel):
+   """One arc of the residual graph at one step.
+
+   `residual` is `null` when the arc is unbounded, which is true of exactly
+   the terminal arcs: they are built at infinity so a cut lands on lanes
+   rather than on supply limits, and `Infinity` is not JSON. Drawn as no
+   numeral -- which is correct anyway, a super-source arc carries no capacity.
+   """
+
+   src: str
+   dst: str
+   residual: Optional[float]
+
+
+class ArcFlowOut(BaseModel):
+   """How much one arc is carrying at one step."""
+
+   src: str
+   dst: str
+   flow: float
+
+
+class ArcPairOut(BaseModel):
+   """An arc named by its endpoints, with nothing to say about it.
+
+   An object rather than a two-element array, so a client reads `.src` here
+   exactly as it does everywhere else in the payload.
+   """
+
+   src: str
+   dst: str
+
+
+class TraceStepOut(BaseModel):
+   """One Edmonds-Karp augmentation, complete enough to draw.
+
+   A *snapshot*, not a delta against the step before it. That is what makes
+   the whole trace shippable as one stateless array: stepping backwards is an
+   index decrement, so no server-side cursor is needed -- and a cursor would
+   break this API's own no-leaked-state promise for no gain.
+
+   `iteration` 0 is the graph before the first push, with an empty path and a
+   zero bottleneck. It is the server's job because the render rule is
+   *residuals from step k-1, path annotation from step k*, and iteration 1
+   otherwise has no "before"; synthesising one client-side would put residual-
+   graph construction in the browser.
+   """
+
+   iteration: int
+   # Super-source first and super-sink last, under the reserved ids
+   # `__source__` / `__sink__`. Retained rather than stripped: a route that
+   # began mid-graph would leave the dashed arc it traverses dark.
+   path: List[str]
+   # One term per arc of `path` -- `len(lane_residuals) == len(path) - 1` --
+   # so a `min(...)` term can be anchored to the lane it came from. The
+   # unbounded terms ship as `null` for exactly that reason; filtering them
+   # is what used to de-align the two.
+   lane_residuals: List[Optional[float]]
+   bottleneck: float
+   total_after: float
+   forward_residual: List[ResidualArcOut]
+   reverse_residual: List[ResidualArcOut]
+   # Every arc, saturated ones at their capacity and idle ones at 0. The
+   # residual lists drop an arc once it saturates, which made a saturated lane
+   # indistinguishable from an absent one -- and the saturated lanes are the
+   # ones Day 2 most wants drawn. Deriving this as `cap - residual` in
+   # JavaScript would recreate the divergence risk `changes` exists to kill.
+   flows: List[ArcFlowOut]
+   used_reverse: List[ArcPairOut]
+
+
+class MaxFlowResponse(BaseModel):
+   max_throughput: float
+   cut_capacity: float
+   source_side: List[str]
+   cut_lanes: List[CutLaneOut]
+   # Absent, not null, unless `trace=true` was asked for -- see `maxflow`.
+   trace: Optional[List[TraceStepOut]] = None
 
 
 class DatasetSummary(BaseModel):
@@ -437,6 +525,28 @@ def _rung_out(rung: LadderRung) -> dict:
    }
 
 
+def _trace_step_out(step: TraceStep) -> TraceStepOut:
+   """One trace step in wire form -- a transcription, not a filter.
+
+   Everything the core computed reaches the payload: the terminals stay on the
+   path, the unbounded residuals stay in `lane_residuals` as `null`, and the
+   flows cover every arc. Tidying belongs where it is displayed.
+   """
+   return TraceStepOut(
+      iteration=step.iteration,
+      path=step.path,
+      lane_residuals=step.lane_residuals,
+      bottleneck=step.bottleneck,
+      total_after=step.total_after,
+      forward_residual=[ResidualArcOut(src=u, dst=v, residual=r)
+                        for u, v, r in step.forward_residual],
+      reverse_residual=[ResidualArcOut(src=u, dst=v, residual=r)
+                        for u, v, r in step.reverse_residual],
+      flows=[ArcFlowOut(src=u, dst=v, flow=f) for u, v, f in step.flows],
+      used_reverse=[ArcPairOut(src=u, dst=v) for u, v in step.used_reverse],
+   )
+
+
 def _threat_picture_out(sc: Scenario, name: str) -> ThreatPictureOut:
    return ThreatPictureOut(
       disruptions=[_disruption_out(d) for d in sc.threat_pictures[name]],
@@ -571,19 +681,42 @@ def naive(
    ]
 
 
-@app.get("/maxflow")
+@app.get("/maxflow", response_model=MaxFlowResponse, response_model_exclude_unset=True)
 def maxflow(
+   trace: bool = Query(False, description="Ship the whole Edmonds-Karp trace."),
    threat: Optional[str] = Query(None),
    dataset: Optional[str] = DATASET_QUERY,
-) -> dict:
-   res = max_flow_min_cut(_net_for(dataset, threat))
-   return {
-      "max_throughput": res.value,
-      "cut_capacity": res.cut_capacity,
-      "source_side": res.source_side,
-      "cut_lanes": [{"src": c.src, "dst": c.dst, "capacity": c.capacity}
-                     for c in res.cut_lanes],
-   }
+) -> MaxFlowResponse:
+   """Max throughput, the min-cut certificate, and optionally how it got there.
+
+   With `trace=true` the *whole* run ships as one array -- every augmentation,
+   complete enough to draw, plus a step 0 holding the graph before the first
+   push. One request, no cursor: Day 2 steps through the augmentations at the
+   front of the room in both directions, the frontend renders synchronously,
+   and a keypress can never await a fetch. Each step being a full snapshot is
+   what makes stepping backwards an index decrement.
+
+   One array entry per augmentation, not per drawn frame: the instructor says
+   "iteration 3", not "frame 6", so the array matches both the CLI's output
+   and the hand-trace on the board, and a display that wants two beats per
+   iteration sub-steps them itself.
+
+   `response_model_exclude_unset` keeps `trace` out of the payload entirely
+   when it was not asked for, rather than shipping a null key to every
+   existing caller. It does not reach the nulls *inside* a trace: those are
+   set explicitly, and `residual: null` means unbounded, which is load-bearing.
+   """
+   res = max_flow_min_cut(_net_for(dataset, threat), trace=trace)
+   body = MaxFlowResponse(
+      max_throughput=res.value,
+      cut_capacity=res.cut_capacity,
+      source_side=res.source_side,
+      cut_lanes=[CutLaneOut(src=c.src, dst=c.dst, capacity=c.capacity)
+                 for c in res.cut_lanes],
+   )
+   if trace:
+      body.trace = [_trace_step_out(step) for step in res.trace]
+   return body
 
 
 @app.get("/interdict")

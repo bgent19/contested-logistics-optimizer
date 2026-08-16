@@ -156,16 +156,21 @@
   --path:               #f0e442;
   --path-w:             11;
 
-  /* NOT HERE, and deliberately: the promoted reverse arc's adopted `24 15` at
-   * stroke 11. Its duty is 0.615, over the 0.6 authoring cap, and it clears the
-   * pitch floor by 1.008x -- inside the closed form's own ~1% error bar, which
-   * is to say it is a value the rule cannot actually certify. It is also
-   * geometry-specific in a way nothing else here is: it exists only for an arc
-   * promoted to offset 22 with a hollow head and its lane's plain residual
-   * suppressed, all of which lands with Flow & Cut. Shipping the token now
-   * would put a pattern in the catalog that fails this ticket's own duty rule,
-   * with no mark on screen to justify the exception. Recorded here so the
-   * ticket that draws it re-opens the question rather than rediscovering it. */
+  /* The promoted reverse arc was held back from this block with a note saying
+   * the ticket that drew it should re-open the question. #42 drew it, and the
+   * question closed the other way: **the promotion adds no pattern at all.**
+   *
+   * The `24 15` at stroke 11 recorded here previously was a value the rule
+   * could not certify -- duty 0.615, over the 0.6 cap, clearing the pitch floor
+   * by 1.008x, inside the closed form's own ~1% error bar. It is not what
+   * shipped. The promoted arc is the residual arc MOVED, not re-patterned: the
+   * same `--residual-w` and `--residual-dash`, at offset 22 instead of 11, with
+   * a hollow head and the plain arc suppressed. So it inherits a pattern the
+   * floors already certify, and there is no new token to certify.
+   *
+   * That is also why the mark spends three non-colour channels and no hue.
+   * Colour was never available: path-vs-lane is dE 66 normally and 3.1 under
+   * achromatopsia, so a hue here would be a distinction the room cannot make. */
 
   /* ---- annotation tier ------------------------------------------------- */
   /* The knockout casing at a lane crossing. Painted in the background colour
@@ -180,6 +185,31 @@
    * with it. */
   --lane-hot:           #ffffff;
   --lane-hot-w:         7;
+
+  /* The min cut's two territories. A wash behind the nodes rather than a fill
+   * on them, so it never argues with the node's own categorical hue -- the one
+   * colour the room has been reading since the first screen.
+   *
+   * Both are desaturated echoes of the terminals they name rather than new
+   * roles, because the partition is a BACKGROUND fact: what the room should
+   * read off it is "these are on one side and those on the other", which is a
+   * grouping and not a category. The cut lanes themselves carry the categorical
+   * `--cut`.
+   *
+   * Solid fills, not translucent ones. The scaffold tier owns opacity and
+   * nothing else on the page may spend it -- two mechanisms dimming would
+   * compose into a value nobody authored. These sit behind every other mark on
+   * the background, so they can be authored as the colour they should end up
+   * being rather than as a wash over one. */
+  --cut-shade-s:        #14304a;
+  --cut-shade-t:        #4a2a10;
+
+  /* The promoted reverse arc's hollow head. An outline weight rather than a
+   * fill, and it lives here for the same reason every other weight does --
+   * written into the marker's markup it would be the one appearance value a
+   * projector retune could not reach. Thin against the arc's own 4, because the
+   * head is a shape to be recognised rather than a mark to be measured. */
+  --arrowhead-hollow-w: 1.6;
 
   --anchor-ink:         #ffffff;
   --anchor-plate:       #07090d;
@@ -451,6 +481,54 @@ html, body {
   text-decoration: line-through;
 }
 
+/* The direction glyph: this lane is on the path, and the path walked it the
+ * wrong way up its own arrow.
+ *
+ * Scoped to `on-path` AND `against` together, so a forward traversal is
+ * unmarked -- the glyph means "against", and a glyph on every path row would
+ * mean nothing. Drawn as `content` on a cell that already exists rather than as
+ * an element: one lane, one row, one numeral, one glyph, and no second row and
+ * no per-direction split of the ledger.
+ *
+ * It rides the flow cell because that is the cell the beat is about, and it is
+ * the last column, so the glyph hangs off the end of the row where it cannot
+ * push a numeral sideways. The panel spends no categorical roles and is allowed
+ * to be dense, which is what makes a glyph nearly free here in a way it is not
+ * on the canvas. */
+#ledger tr.on-path.against .cell-flow::after {
+  content: " \21B0";
+  color: var(--panel-tick-on-path);
+  margin-left: 2px;
+}
+
+/* ---- the beat timeline --------------------------------------------------- */
+/* The third panel slot, populated by whichever view owns a spine. One row per
+ * BEAT, because a beat is the keyboard's finest move and a row per coarse unit
+ * would leave half the story unnamed. Clicking a row jumps to that beat, which
+ * duplicates a keyboard jump and reaches nothing the keyboard cannot. */
+#timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--panel-type-row);
+}
+
+#timeline .beat-row {
+  padding: 3px 4px;
+  border-top: 1px solid var(--panel-rule);
+  border-left: var(--panel-tick-width) solid transparent;
+  color: var(--panel-muted);
+  cursor: pointer;
+}
+
+/* The current beat is marked by the same left-edge tick the ledger uses, for
+ * the same reason: a fill or a bolder weight would change the row's metrics and
+ * move every row under it on the beat it moved to. */
+#timeline .beat-row.current {
+  border-left-color: var(--panel-tick-hot);
+  color: var(--panel-ink);
+}
+
 /* ---- the diagram --------------------------------------------------------- */
 /* Stroke widths and type sizes are authored in diagram units and scale with
  * the graph. No `vector-effect: non-scaling-stroke` anywhere: a gutter that
@@ -610,7 +688,51 @@ html, body {
   display: none;
 }
 
-.cut-shade, .route-mark, .naive-mark, .violation { display: none; }
+/* The promoted reverse arc: the residual arc MOVED, not re-patterned.
+ *
+ * Same stroke and same dash as the arc it is a promotion of -- reaching for the
+ * same tokens rather than restating their values, so a retune of the residual
+ * moves both together. Three non-colour channels carry the distinction and no
+ * hue does: the offset it is drawn at (22 against 11), the hollow head, and the
+ * suppression of the plain arc while it is up. Colour was never available --
+ * path-vs-lane is dE 66 normally and 3.1 under achromatopsia. */
+.reverse-arc {
+  stroke: var(--residual);
+  stroke-width: var(--residual-w);
+  stroke-dasharray: var(--residual-dash);
+  marker-end: url(#arrowhead-hollow);
+  fill: none;
+  display: none;
+}
+
+/* The min cut's territories, painted behind the lanes and the nodes. This is
+ * what makes the certificate a PARTITION of the graph rather than a list of
+ * lane names -- the room reads two sides and the lanes that cross between. */
+.cut-shade {
+  fill: none;
+  display: none;
+}
+
+.show-cut .cut-shade.s-side { fill: var(--cut-shade-s); display: inline; }
+.show-cut .cut-shade.t-side { fill: var(--cut-shade-t); display: inline; }
+
+/* A mark whose layer is on but which has nothing to say on THIS beat.
+ *
+ * The counterpart to the layer rules below: a layer decides whether a kind of
+ * mark may be seen, and this decides whether a particular one has content. Both
+ * are needed -- without this, switching the residual layer on would draw an arc
+ * beside every lane whether or not the residual graph has one there.
+ *
+ * Specificity is deliberate: `.show-residual .residual-arc` is two classes, so
+ * `.off` has to arrive with a third to win. This is also where PROMOTION
+ * REPLACES RATHER THAN ADDS is enforced -- one class write, and the plain arc
+ * is gone rather than merging with the promoted one at 4.0 units apart. */
+.show-residual .residual-arc.off,
+.show-residual .reverse-arc.off,
+.show-path .path-mark.off,
+.show-cut .cut-mark.off { display: none; }
+
+.route-mark, .naive-mark, .violation { display: none; }
 
 /* ---- the scaffold tier ----------------------------------------------------
  * Lanes the active annotation does not touch dim to 30%, so the room's eye goes
@@ -689,10 +811,10 @@ html, body {
 
 /* Marks landing with the view tickets. Their strokes are already tokenised and
  * derived above; these are the rules that will switch them on. */
-.show-residual .residual-arc { display: inline; }
+.show-residual .residual-arc,
+.show-residual .reverse-arc  { display: inline; }
 .show-path .path-mark        { display: inline; }
-.show-cut .cut-mark,
-.show-cut .cut-shade         { display: inline; }
+.show-cut .cut-mark          { display: inline; }
 .show-route .route-mark      { display: inline; }
 .show-naive .naive-mark,
 .show-naive .violation       { display: inline; }
@@ -700,3 +822,14 @@ html, body {
 /* Arrowheads are appearance, so they are attached here rather than written
  * onto each line from JavaScript. */
 .lane, .synth { marker-end: url(#arrowhead); }
+
+/* The hollow head's outline. Styled from here rather than from attributes on
+ * the marker's own path, so the one weight inside a `<marker>` is retunable
+ * with every other weight on the page. `context-stroke` takes the colour from
+ * whatever wears the head, which is what keeps the promotion spending no hue
+ * of its own. */
+#arrowhead-hollow path {
+  fill: none;
+  stroke: context-stroke;
+  stroke-width: var(--arrowhead-hollow-w);
+}

@@ -19,7 +19,7 @@
  * visibly struck out.
  */
 
-import { frozen, geometry, handles } from "./graph.js";
+import { frozen, geometry, handles, SUPER_SINK, SUPER_SOURCE } from "./graph.js";
 import { edgeChanges, isRemoved, laneStates, ROW_STATES } from "./state.js";
 
 /** The em dash an empty headline slot shows. A slot is never blank: a gap
@@ -73,6 +73,30 @@ const LABEL_GAP = 12;          /* air between a node's disc and its id */
  * not attached to, this constant is the one to pull, not the anchor solve. */
 const ROW_OFFSET = 13;
 
+/* ---- the residual marks' two chords ---------------------------------------
+ * A residual arc is drawn beside its lane rather than on it, at these two
+ * perpendicular offsets. Named rather than inline because the RELATIONSHIP is
+ * the load-bearing part: 11 and 22 are one promotion apart, and the gap between
+ * them is what forced the replace-never-add rule below.
+ *
+ * The plain arc sits at 11, clear of the lane's own 14-unit half-band. The
+ * promotion moves it out to 22 -- in place, on the same side -- so the room
+ * sees the same arc step away from the lane rather than a second arc appear
+ * beside it.
+ *
+ * Two arcs at 11 and 22 leave 4.0 units of ground between their strokes, which
+ * at the back of the room is no gap at all: they merge into one heavy mark that
+ * says neither thing. That is why promotion REPLACES. It is a trap only drawing
+ * reveals -- the numbers look comfortable written down.
+ */
+const RESIDUAL_OFFSET = 11;
+const REVERSE_OFFSET = 22;
+
+/* Which side of the lane an arc is drawn on falls out of the direction it is
+ * drawn IN: the offset is taken along the left normal, so walking the lane the
+ * other way puts the same positive offset on the other side. Nothing here has
+ * to pick a side; the arc's own direction does it. */
+
 /**
  * Shorten a segment so it starts and ends clear of the discs it joins.
  *
@@ -89,6 +113,51 @@ function trim(a, b, startRadius, endRadius) {
     x2: b.x - (dx / length) * endRadius,
     y2: b.y - (dy / length) * endRadius,
   };
+}
+
+/**
+ * Where a line meets a circle, given the foot of the centre's perpendicular on
+ * that line and the line's unit direction.
+ *
+ * The trap this exists for: `trim` above walks in from a node's CENTRE along
+ * the centre line, which is the right line only for a mark drawn on it. An
+ * offset chord is a different line, and trimming it by the centre-line rule
+ * leaves one end floating clear of the node rim and drives the other inside the
+ * disc -- visible immediately on a projector and invisible in the arithmetic.
+ *
+ * Half-chord is `sqrt(r^2 - d^2)` where `d` is the perpendicular distance. The
+ * clamp at zero handles the tangent case, where the offset equals the radius
+ * and the chord touches at a point: the mark then starts at the foot, which is
+ * the right answer rather than a NaN.
+ */
+function circleIntersection(centre, radius, foot, direction, sign) {
+  const gap = Math.hypot(foot.x - centre.x, foot.y - centre.y);
+  const half = Math.sqrt(Math.max(radius * radius - gap * gap, 0));
+  return {
+    x: foot.x + direction.x * half * sign,
+    y: foot.y + direction.y * half * sign,
+  };
+}
+
+/**
+ * A chord parallel to `a -> b`, offset perpendicular to it, clipped to the two
+ * discs it runs between.
+ *
+ * Direction is the argument order: pass `(b, a, ...)` for the arc that runs the
+ * other way and it lands on the other side of the lane with the same positive
+ * offset, because the normal turns with it.
+ */
+function offsetChord(a, b, offset, startRadius, endRadius) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const direction = { x: dx / length, y: dy / length };
+  const normal = { x: -direction.y, y: direction.x };
+  const footA = { x: a.x + normal.x * offset, y: a.y + normal.y * offset };
+  const footB = { x: b.x + normal.x * offset, y: b.y + normal.y * offset };
+  const start = circleIntersection(a, startRadius, footA, direction, 1);
+  const end = circleIntersection(b, endRadius, footB, direction, -1);
+  return { x1: start.x, y1: start.y, x2: end.x, y2: end.y };
 }
 
 function place(line, segment) {
@@ -144,6 +213,7 @@ function renderHeadline(state, certificates) {
   slot("supply", scenario.total_supply);
   slot("demand", scenario.total_demand);
   slot("throughput", state.throughput);
+  slot("bottleneck", state.bottleneck);
   slot("cut", state.cut);
   slot("interdicted", certificates.removed);
   slot("violations", certificates.violating);
@@ -185,8 +255,24 @@ export function render(state) {
     bundle.text.setAttribute("y", point.y + 6);
   }
 
+  /* Which synthetic arcs this beat's path actually traverses.
+   *
+   * The path highlight includes them, and that is a rule rather than a detail:
+   * a highlight that started at the first real node would show an augmenting
+   * path beginning in the middle of the graph, with the arc it entered through
+   * left dark. Read off the ordered walk rather than off the lane set, because
+   * these arcs have no lane and no edge id to be in a set of. */
+  const onPathTerminals = new Set();
+  for (let i = 0; i + 1 < state.path.length; i += 1) {
+    const from = state.path[i];
+    const to = state.path[i + 1];
+    if (from === SUPER_SOURCE) onPathTerminals.add(`S:${to}`);
+    else if (to === SUPER_SINK) onPathTerminals.add(`T:${from}`);
+  }
+
   for (const link of frozen.terminalLinks) {
-    const bundle = handles.terminals.get(`${link.role}:${link.nodeId}`);
+    const key = `${link.role}:${link.nodeId}`;
+    const bundle = handles.terminals.get(key);
     const node = positions.get(link.nodeId);
     const terminal = positions.get(link.role);
     /* S feeds the supply node; the demand node feeds T. The arrow points the
@@ -195,6 +281,8 @@ export function render(state) {
       ? trim(terminal, node, TERMINAL_R, NODE_R + LANE_GAP)
       : trim(node, terminal, NODE_R, TERMINAL_R + LANE_GAP);
     place(bundle.line, segment);
+    place(bundle.pathMark, segment);
+    bundle.pathMark.classList.toggle("off", !onPathTerminals.has(key));
   }
 
   /* -- lanes --------------------------------------------------------------- */
@@ -272,6 +360,59 @@ export function render(state) {
       });
     }
 
+    /* -- the Flow & Cut marks ---------------------------------------------- *
+     * Placed every pass and shown by class, never built here. Geometry is
+     * cheap and unconditional; visibility is the only thing the beat decides.
+     *
+     * `promoted` is the reverse-arc moment: this beat's path walks this lane
+     * AGAINST its own direction, so the traversal is not using the lane at all
+     * -- it is using a residual arc, which is not a lane, and the screen has to
+     * agree with the instructor saying exactly that. */
+    const promoted = state.marks.against.has(edgeId);
+    const residual = state.residuals.get(edgeId);
+    const mark = bundle.marks;
+
+    place(mark.residualAlong,
+          offsetChord(a, b, RESIDUAL_OFFSET, NODE_R, NODE_R + LANE_GAP));
+    place(mark.residualCounter,
+          offsetChord(b, a, RESIDUAL_OFFSET, NODE_R, NODE_R + LANE_GAP));
+    place(mark.reverseArc,
+          offsetChord(b, a, REVERSE_OFFSET, NODE_R, NODE_R + LANE_GAP));
+
+    /* PROMOTION REPLACES, NEVER ADDS -- and replaces exactly one arc.
+     *
+     * The promoted mark IS the counter arc, moved from 11 out to 22, so the
+     * counter arc is what goes dark: the two of them at 11 and 22 leave 4.0
+     * units between their strokes and merge into one heavy mark that says
+     * neither thing.
+     *
+     * The along arc is a DIFFERENT arc on the other side of the lane, 33 units
+     * away and in no danger of merging, and it carries a residual the layer is
+     * on to show. Suppressing it too would take a real number off the board to
+     * fix a collision it was never part of. */
+    mark.residualAlong.classList.toggle(
+      "off", !residual || residual.along === undefined);
+    mark.residualCounter.classList.toggle(
+      "off", promoted || !residual || residual.counter === undefined);
+    mark.reverseArc.classList.toggle("off", !promoted);
+
+    /* The path highlight is on the lane, at stroke 11 against the lane's 4.5,
+     * so none of the lane shows through -- which is the decision. A lane walked
+     * against its direction is deliberately NOT highlighted: its traversal is
+     * the promoted arc beside it, and painting the lane too would say the
+     * augmentation went the way the arrow points. */
+    place(mark.pathMark, segment);
+    mark.pathMark.classList.toggle("off", !(states["on-path"] && !promoted));
+
+    place(mark.cutMark, segment);
+    mark.cutMark.classList.toggle("off", !states["in-cut"]);
+
+    /* The direction glyph's other half: a row is marked only where it is BOTH
+     * on the path and running against the lane, so a forward traversal stays
+     * unmarked. One lane, one row, one numeral, one glyph -- the glyph itself
+     * is `content` in the stylesheet, so no second element has to exist. */
+    bundle.ledgerRow.classList.toggle("against", promoted);
+
     /* -- the ledger's mutable cells ---------------------------------------- *
      * The three numbers a threat picture can move. The lane's identity cells
      * were written at build time and never change; these are text content on
@@ -279,6 +420,18 @@ export function render(state) {
      * reflows when a two-digit capacity becomes three. */
     bundle.ledgerCells.cap.textContent = String(cap);
     bundle.ledgerCells.risk.textContent = risk.toFixed(2);
+
+    /* This beat's flow on this lane, READ off the trace and never derived. The
+     * lane carries a numeral whenever the beat knows one, including a zero: a
+     * saturated lane and an idle one are then told apart by what they say
+     * rather than by both saying nothing, which is the whole reason the server
+     * ships `flows` covering every arc instead of leaving it to be recovered
+     * from the residual lists. A lane the beat has no number for shows nothing
+     * at all, which is a third state and not a zero. */
+    const flow = state.flows.get(edgeId);
+    const flowText = flow === undefined ? "" : String(flow);
+    bundle.ledgerCells.flow.textContent = flowText;
+    bundle.canvasLabel.flow.textContent = flowText;
 
     /* -- the anchor's two rows --------------------------------------------- */
     const label = bundle.canvasLabel;
@@ -317,5 +470,40 @@ export function render(state) {
     bundle.id.setAttribute("y", point.y - NODE_R - 12);
     bundle.quantity.setAttribute("x", point.x);
     bundle.quantity.setAttribute("y", point.y + 6);
+    shade(bundle.shade, point, state.sourceSide,
+          (sides) => sides.has(nodeId));
   }
+
+  /* The terminals take their side by definition rather than from the payload:
+   * `source_side` lists the real nodes the source can still reach, and the two
+   * derived terminals are the endpoints the partition is defined between. S is
+   * on the source side of every cut and T on the sink side of every cut, so
+   * reading them out of the list would be looking up a fact that is true by
+   * construction -- and finding them absent from it. */
+  for (const role of ["S", "T"]) {
+    const bundle = handles.terminals.get(role);
+    shade(bundle.shade, positions.get(role), state.sourceSide,
+          () => role === "S");
+  }
+
+  /* -- the beat timeline ---------------------------------------------------- */
+  handles.timeline.forEach((row, index) => {
+    row.classList.toggle("current", index === state.beat);
+  });
+}
+
+/**
+ * Put one node's disc on its side of the min cut, or on neither.
+ *
+ * `null` is the third state and the common one: no beat is showing a cut, so
+ * neither class is written and the wash is absent rather than being drawn in
+ * some neutral colour. A partition is only meaningful while there is a cut to
+ * partition against.
+ */
+function shade(disc, point, sides, isSourceSide) {
+  disc.setAttribute("cx", point.x);
+  disc.setAttribute("cy", point.y);
+  const on = Boolean(sides) && isSourceSide(sides);
+  disc.classList.toggle("s-side", Boolean(sides) && on);
+  disc.classList.toggle("t-side", Boolean(sides) && !on);
 }
