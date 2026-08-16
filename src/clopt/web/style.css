@@ -204,6 +204,13 @@
   --cut-shade-s:        #14304a;
   --cut-shade-t:        #4a2a10;
 
+  /* The promoted reverse arc's hollow head. An outline weight rather than a
+   * fill, and it lives here for the same reason every other weight does --
+   * written into the marker's markup it would be the one appearance value a
+   * projector retune could not reach. Thin against the arc's own 4, because the
+   * head is a shape to be recognised rather than a mark to be measured. */
+  --arrowhead-hollow-w: 1.6;
+
   --anchor-ink:         #ffffff;
   --anchor-plate:       #07090d;
   --anchor-plate-op:    .88;
@@ -815,3 +822,14 @@ html, body {
 /* Arrowheads are appearance, so they are attached here rather than written
  * onto each line from JavaScript. */
 .lane, .synth { marker-end: url(#arrowhead); }
+
+/* The hollow head's outline. Styled from here rather than from attributes on
+ * the marker's own path, so the one weight inside a `<marker>` is retunable
+ * with every other weight on the page. `context-stroke` takes the colour from
+ * whatever wears the head, which is what keeps the promotion spending no hue
+ * of its own. */
+#arrowhead-hollow path {
+  fill: none;
+  stroke: context-stroke;
+  stroke-width: var(--arrowhead-hollow-w);
+}

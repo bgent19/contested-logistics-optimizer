@@ -47,11 +47,14 @@
             marker cannot be restyled from the element that wears it --
             `context-stroke` reaches the stroke, and there is no equivalent that
             would let one path be filled here and hollow there.
+
+            The outline's weight is a token in style.css like every other
+            weight on the page: a stroke width written here would be the one
+            appearance value a projector retune could not reach.
           -->
           <marker id="arrowhead-hollow" viewBox="0 0 12 12" refX="10" refY="6"
                   markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-            <path d="M1,1.5 L11,6 L1,10.5 z" fill="none"
-                  stroke="context-stroke" stroke-width="1.6"/>
+            <path d="M1,1.5 L11,6 L1,10.5 z"/>
           </marker>
         </defs>
 
@@ -348,7 +351,6 @@
       buildControls();
       bindLedger();
       bindTimeline();
-      bindKeys();
       setView(VIEWS[0].id);
 
       // An empty menu means the server loaded no dataset at all, which it
@@ -357,6 +359,14 @@
       // drawing whatever the default happens to be.
       if (!datasets.length) throw new Error("/datasets returned nothing to draw");
       await load(datasets[0].id);
+
+      // The keyboard goes live LAST, once a complete spine is installed.
+      // Bound before the load, the arrows would be answerable during the fetch
+      // -- landing on the one-beat fallback spine and doing nothing, which is
+      // the one thing worse than a key that is not yet bound: a key that is
+      // bound and silently declines. Anything a keypress can reach is fetched
+      // before the first keypress, and this is where that becomes literal.
+      bindKeys();
     }
 
     boot();

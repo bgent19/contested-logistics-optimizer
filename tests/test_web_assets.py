@@ -1079,8 +1079,14 @@ def test_the_beat_timeline_is_populated_and_its_rows_reach_a_beat(assets):
 # cannot be allowed to break, because a residual the API disagrees with is a
 # number on the projector that contradicts an answer the same tool gave a
 # minute earlier.
+#
+# `used_reverse` is deliberately NOT on this list. Every arc it names is an arc
+# of the same step's path, so reading it would mark nothing the path has not
+# already marked -- and what drives the promotion is the drawn lane's own
+# direction, which is a fact about the picture rather than about the solver's
+# bookkeeping.
 TRACE_FIELDS = ["lane_residuals", "bottleneck", "total_after",
-                "forward_residual", "reverse_residual", "flows", "used_reverse"]
+                "forward_residual", "reverse_residual", "flows"]
 
 
 def test_every_number_the_view_draws_comes_off_the_trace(assets):

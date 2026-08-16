@@ -213,6 +213,7 @@ function renderHeadline(state, certificates) {
   slot("supply", scenario.total_supply);
   slot("demand", scenario.total_demand);
   slot("throughput", state.throughput);
+  slot("bottleneck", state.bottleneck);
   slot("cut", state.cut);
   slot("interdicted", certificates.removed);
   slot("violations", certificates.violating);
@@ -378,12 +379,19 @@ export function render(state) {
     place(mark.reverseArc,
           offsetChord(b, a, REVERSE_OFFSET, NODE_R, NODE_R + LANE_GAP));
 
-    /* PROMOTION REPLACES, NEVER ADDS. Both plain arcs go dark while the
-     * promoted one is up -- the same-side pair at 11 and 22 would merge into
-     * one heavy mark, and the far-side arc is spare capacity nobody is talking
-     * about on the one beat whose subject is the cancellation. */
+    /* PROMOTION REPLACES, NEVER ADDS -- and replaces exactly one arc.
+     *
+     * The promoted mark IS the counter arc, moved from 11 out to 22, so the
+     * counter arc is what goes dark: the two of them at 11 and 22 leave 4.0
+     * units between their strokes and merge into one heavy mark that says
+     * neither thing.
+     *
+     * The along arc is a DIFFERENT arc on the other side of the lane, 33 units
+     * away and in no danger of merging, and it carries a residual the layer is
+     * on to show. Suppressing it too would take a real number off the board to
+     * fix a collision it was never part of. */
     mark.residualAlong.classList.toggle(
-      "off", promoted || !residual || residual.along === undefined);
+      "off", !residual || residual.along === undefined);
     mark.residualCounter.classList.toggle(
       "off", promoted || !residual || residual.counter === undefined);
     mark.reverseArc.classList.toggle("off", !promoted);
@@ -462,7 +470,8 @@ export function render(state) {
     bundle.id.setAttribute("y", point.y - NODE_R - 12);
     bundle.quantity.setAttribute("x", point.x);
     bundle.quantity.setAttribute("y", point.y + 6);
-    shade(bundle.shade, point, state.sourceSide, nodeId);
+    shade(bundle.shade, point, state.sourceSide,
+          (sides) => sides.has(nodeId));
   }
 
   /* The terminals take their side by definition rather than from the payload:
@@ -473,12 +482,8 @@ export function render(state) {
    * construction -- and finding them absent from it. */
   for (const role of ["S", "T"]) {
     const bundle = handles.terminals.get(role);
-    const point = positions.get(role);
-    const sides = state.sourceSide;
-    bundle.shade.setAttribute("cx", point.x);
-    bundle.shade.setAttribute("cy", point.y);
-    bundle.shade.classList.toggle("s-side", Boolean(sides) && role === "S");
-    bundle.shade.classList.toggle("t-side", Boolean(sides) && role === "T");
+    shade(bundle.shade, positions.get(role), state.sourceSide,
+          () => role === "S");
   }
 
   /* -- the beat timeline ---------------------------------------------------- */
@@ -495,9 +500,10 @@ export function render(state) {
  * some neutral colour. A partition is only meaningful while there is a cut to
  * partition against.
  */
-function shade(disc, point, sides, nodeId) {
+function shade(disc, point, sides, isSourceSide) {
   disc.setAttribute("cx", point.x);
   disc.setAttribute("cy", point.y);
-  disc.classList.toggle("s-side", Boolean(sides) && sides.has(nodeId));
-  disc.classList.toggle("t-side", Boolean(sides) && !sides.has(nodeId));
+  const on = Boolean(sides) && isSourceSide(sides);
+  disc.classList.toggle("s-side", Boolean(sides) && on);
+  disc.classList.toggle("t-side", Boolean(sides) && !on);
 }

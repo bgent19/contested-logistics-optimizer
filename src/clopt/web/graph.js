@@ -13,7 +13,7 @@
  * has no transitions to hide the jump.
  *
  *   1. the layered fallback for nodes with no authored coordinates
- *   2. the directed-pair -> {edgeId, direction} lookup
+ *   2. the directed-pair -> {edgeId, stored, against} lookup
  *   3. the lane anchor solve
  *   4. the crossing solve
  */
@@ -74,6 +74,11 @@ const HEADLINE_SLOTS = [
   { id: "supply",      label: "Supply" },
   { id: "demand",      label: "Demand" },
   { id: "throughput",  label: "Flow" },
+  /* The augmenting path's bottleneck -- the number beat *a* is asking the room
+   * to read, and a solver scalar like the two either side of it rather than a
+   * count of anything. It sits beside `Flow` because the pair is the sentence:
+   * the flow is this, and this push adds that much to it. */
+  { id: "bottleneck",  label: "Push" },
   { id: "cut",         label: "Cut" },
   /* "Struck", not "Cut": `Cut` above is the min cut's capacity, and two slots
    * a row apart both reading "cut" is exactly the ambiguity the instructor
@@ -125,8 +130,7 @@ export const frozen = {
   positions: new Map(),    /* nodeId -> {x, y}, terminals included */
   anchors: new Map(),      /* edgeId -> {x, y} */
   crossings: [],           /* {point, angle, lanes: [edgeId, edgeId]} */
-  directed: new Map(),     /* "src>dst" -> {edgeId, direction} */
-  residualArcs: new Map(), /* "src>dst" -> {edgeId, stored, against} */
+  directed: new Map(),     /* "src>dst" -> {edgeId, stored, against} */
   terminalLinks: [],       /* {nodeId, role} for each derived S/T arc */
 };
 
@@ -191,28 +195,6 @@ function layeredFallback(network, placed) {
   return positions;
 }
 
-/* ---- 2. the directed-pair lookup -----------------------------------------
- * This must exist regardless of what needs it, because reverse arcs have no id
- * by construction: a bidirectional lane is ONE stored edge and TWO arcs in the
- * solver, and every result endpoint answers in `{src, dst}` pairs. Without this
- * map, matching a solver result back to the lane it belongs to is a scan.
- */
-function directedLookup(edges) {
-  const map = new Map();
-  for (const edge of edges) {
-    map.set(`${edge.src}>${edge.dst}`, { edgeId: edge.id, direction: "forward" });
-    if (edge.bidirectional) {
-      map.set(`${edge.dst}>${edge.src}`, { edgeId: edge.id, direction: "reverse" });
-    }
-  }
-  return map;
-}
-
-/** The lane a directed pair belongs to, and which way along it. */
-export function laneFor(src, dst) {
-  return frozen.directed.get(`${src}>${dst}`) || null;
-}
-
 /* The reserved ids the solver gives its derived terminals. Declared here
  * because this module is what derives the terminals for the canvas; the trace
  * payload names them, and the path highlight has to recognise them to draw the
@@ -220,13 +202,16 @@ export function laneFor(src, dst) {
 export const SUPER_SOURCE = "__source__";
 export const SUPER_SINK = "__sink__";
 
-/* ---- 2b. the residual-arc lookup ------------------------------------------
- * A second map, because the solver walks arcs the directed lookup above does
- * not have. Edmonds-Karp gives EVERY lane a residual reverse arc -- that is the
- * cancellation trick Day 2 is about -- but `directedLookup` only registers a
- * reversed pair for a lane that is genuinely bidirectional. So `B>A` on a
- * one-way lane `A->B` is exactly the reverse-arc moment the view exists to
- * show, and it is exactly the key the other map does not hold.
+/* ---- 2. the directed-pair lookup -----------------------------------------
+ * This must exist regardless of what needs it, because reverse arcs have no id
+ * by construction: a bidirectional lane is ONE stored edge and TWO arcs in the
+ * solver, and every result endpoint answers in `{src, dst}` pairs. Without this
+ * map, matching a solver result back to the lane it belongs to is a scan.
+ *
+ * It keys EVERY ordered pair a solver can hand back, not only the ones the
+ * network stores. Edmonds-Karp gives every lane a residual reverse arc -- that
+ * is the cancellation trick Day 2 is about -- so `B>A` on a one-way lane `A->B`
+ * is a pair the solver walks and the stored edges do not name.
  *
  * Three facts per arc rather than one, and the third is the subtle one:
  *
@@ -238,7 +223,7 @@ export const SUPER_SINK = "__sink__";
  *            lane's own -- which is what leaves a legal reverse traversal
  *            unmarked, where marking it would teach the wrong thing.
  */
-function residualLookup(edges) {
+function directedLookup(edges) {
   const map = new Map();
   /* Against-entries first, forward second, so the forward reading wins where a
    * file stores both `A->B` and `B->A` as separate lanes. Losing that tie the
@@ -269,7 +254,7 @@ function residualLookup(edges) {
  * no capacity to report.
  */
 export function laneForArc(src, dst) {
-  return frozen.residualArcs.get(`${src}>${dst}`) || null;
+  return frozen.directed.get(`${src}>${dst}`) || null;
 }
 
 /* ---- geometry primitives -------------------------------------------------- */
@@ -559,7 +544,6 @@ export function buildGraph(svg, payload) {
   frozen.crossings = crossingSolve(network.edges, positions);
   frozen.anchors = anchorSolve(network.edges, positions, frozen.crossings);
   frozen.directed = directedLookup(network.edges);
-  frozen.residualArcs = residualLookup(network.edges);
   frozen.terminalLinks = terminalLinks(network.nodes);
 
   const xs = [...positions.values()].map((point) => point.x);
@@ -793,4 +777,4 @@ export function buildTimeline(beats) {
 }
 
 /** Geometry the render pass needs and must not recompute differently. */
-export const geometry = { NODE_R, TERMINAL_R, LANE_GAP, SHADE_R };
+export const geometry = { NODE_R, TERMINAL_R, LANE_GAP };

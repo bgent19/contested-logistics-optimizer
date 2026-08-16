@@ -59,7 +59,7 @@ export const state = {
   beat: 0,
 
   /**
-   * Per-view memory, `{viewId: {beat, layers}}`.
+   * Per-view memory, `{viewId: {beat, overrides}}`.
    *
    * Views are jumpable in any order and **each remembers its own state**: Flow
    * & Cut stays parked on augmentation 3 while the instructor detours into
@@ -602,16 +602,13 @@ function showPath(current, step, laneOf) {
     current.marks.hot.add(lane.edgeId);
     if (lane.against) current.marks.against.add(lane.edgeId);
   }
-  /* The solver's own account of which arcs it walked backwards. Read rather
-   * than inferred: `against` above is a fact about the DRAWN lane's direction,
-   * and on a bidirectional lane the two part company -- the solver can take a
-   * cancellation arc along a direction the lane itself allows. Both are true
-   * and they are different sentences, so the beat that is about cancellation
-   * heats the lanes the solver says it cancelled on. */
-  for (const arc of step.used_reverse) {
-    const lane = laneOf(arc.src, arc.dst);
-    if (lane) current.marks.hot.add(lane.edgeId);
-  }
+  /* `used_reverse` is deliberately not read here. It names the arcs the solver
+   * walked backwards, and every one of them is an arc OF THIS PATH -- so it
+   * heats nothing the loop above has not already heated. What drives the
+   * promotion is `against`, which is a fact about the drawn lane's direction
+   * rather than about the solver's bookkeeping, and that is the right question:
+   * the mark exists so the instructor can say "here it uses a residual arc,
+   * which is not a lane", which is a claim about the picture. */
 }
 
 /**
@@ -635,7 +632,7 @@ function bindingLane(step) {
 }
 
 /** Switch a beat's layers, by id, over whatever the view's entry table gave. */
-function layers(current, on, off) {
+function setLayers(current, on, off) {
   for (const id of on) current.layers.add(id);
   for (const id of off) current.layers.delete(id);
 }
@@ -674,7 +671,7 @@ export function flowCutSpine(payload, laneOf) {
     apply: (current) => {
       showStep(current, trace[0], laneOf);
       current.throughput = trace[0].total_after;
-      layers(current, ["residual"], ["path", "cut"]);
+      setLayers(current, ["residual"], ["path", "cut"]);
     },
   }];
 
@@ -697,15 +694,14 @@ export function flowCutSpine(payload, laneOf) {
         showStep(current, before, laneOf);
         showPath(current, step, laneOf);
         current.throughput = before.total_after;
-        /* The one A/B pair, and the only place this view claims it: what this
-         * push is about to do to the total. A number the instructor can say
-         * out loud before pressing the key that makes it true. */
-        current.delta = {
-          label: "Flow",
-          before: before.total_after,
-          after: step.total_after,
-        };
-        layers(current, ["residual", "path"], ["cut"]);
+        /* The A/B pair is deliberately left alone. It is ONE slot for the whole
+         * page and its subject is the before/after of a threat picture, which
+         * is a comparison of two states that are never simultaneously visible.
+         * An augmentation is not that -- the "after" arrives one keypress later
+         * and is then simply on screen -- so claiming the slot here would spend
+         * the page's only A/B on a number the next beat shows anyway. The push
+         * is a headline scalar instead. */
+        setLayers(current, ["residual", "path"], ["cut"]);
       },
     });
 
@@ -722,7 +718,7 @@ export function flowCutSpine(payload, laneOf) {
           const lane = laneOf(step.path[i], step.path[i + 1]);
           if (lane) current.marks.hot.add(lane.edgeId);
         }
-        layers(current, ["residual"], ["path", "cut"]);
+        setLayers(current, ["residual"], ["path", "cut"]);
       },
     });
   });
@@ -747,7 +743,7 @@ export function flowCutSpine(payload, laneOf) {
           current.marks.hot.add(found.edgeId);
         }
       }
-      layers(current, ["cut"], ["residual", "path"]);
+      setLayers(current, ["cut"], ["residual", "path"]);
     },
   });
 
