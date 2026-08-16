@@ -144,10 +144,11 @@
     through api.js, mutates through state.js, and repaints through render.js.
   -->
   <script type="module">
-    import { fetchDatasets, fetchScenario, fetchMaxflow } from "./api.js";
+    import { fetchDatasets, fetchScenario, fetchMaxflow,
+             fetchLadder } from "./api.js";
     import { state, setScenario, setDataset, setView, toggleLayer, pinLane,
              stepBeat, stepUnit, jumpToUnit, resetView, setBeat, setSpine,
-             flowCutSpine, spine, resolveBeat } from "./state.js";
+             flowCutSpine, interdictionSpine, spine, resolveBeat } from "./state.js";
     import { buildGraph, buildTimeline, laneForArc } from "./graph.js";
     import { render } from "./render.js";
     import { VIEWS, LAYERS, applyLayerClasses, viewForKey } from "./views.js";
@@ -324,11 +325,23 @@
       // Awaited before the spine is installed, and the spine is installed
       // complete or not at all: a half-built ladder is a keyboard that works
       // for three presses.
-      const maxflow = await fetchMaxflow(datasetId, state.threat);
+      //
+      // Both spines' payloads are asked for together and awaited together. The
+      // ladder is one request per dataset for the same reason the trace is:
+      // Day 4 is walked up and back down at the front of the room, and the
+      // alternative is the 2 x K requests a per-rung frontend would issue.
+      const [maxflow, ladder] = await Promise.all([
+        fetchMaxflow(datasetId, state.threat),
+        fetchLadder(datasetId, state.threat),
+      ]);
       // The lane lookup is handed in rather than imported by state.js, which
       // keeps the module that owns app state free of the one that owns
       // elements.
       setSpine("flow-cut", flowCutSpine(maxflow, laneForArc));
+      // Two payloads, because Day 4 draws Day 3's certificate underneath its
+      // own wreckage: the ladder says which lanes the adversary takes and
+      // `/maxflow` says which lanes certify the cut it is working against.
+      setSpine("interdiction", interdictionSpine(ladder, maxflow, laneForArc));
 
       // The beat is re-resolved against the new dataset rather than reset: the
       // marks were cleared with the old theater's edge ids, and the current

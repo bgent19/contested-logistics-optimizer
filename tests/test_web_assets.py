@@ -1120,3 +1120,228 @@ def test_no_module_derives_a_residual_or_a_flow_in_javascript(assets):
             f"flows are computed server-side and shipped; deriving either here "
             f"is the divergence the trace payload exists to prevent."
         )
+
+
+# ---- the Interdiction view (issue #43) --------------------------------------
+# Day 4, the adversary's turn. Two things are checked here that a laptop cannot
+# show: that nothing about how long Day 4 is is decided in JavaScript, and that
+# carrying two tracks up the ladder spends no second visual channel.
+
+# Field names from the /interdict ladder payload. Their presence in the JS is
+# what says the ladder's shape was READ rather than worked out here. Ladder
+# length, rung collapse and divergence are server facts: a frontend that decided
+# any of them would be a second implementation of the stop rule, disagreeing with
+# the CLI on the one dataset nobody checked.
+#
+# `baseline_throughput` is deliberately NOT on this list. The ladder carries it
+# and the view does not draw it: the untouched theater's throughput sits one
+# slot from the cut capacity it must equal by max-flow/min-cut, so both come off
+# the one `/maxflow` response instead. The only ladder numbers that reach the
+# screen are the ones no other response also computes.
+LADDER_FIELDS = ["rungs", "k_through", "terminated", "residual_throughput",
+                 "diverges", "exhaustive", "greedy", "searched", "skipped"]
+
+
+def test_the_whole_ladder_is_fetched_in_one_request(assets):
+    """One call per dataset, and it is api.js that knows the parameter.
+
+    Stepping never awaits a fetch, so the alternative to one ladder call is the
+    2 x K x datasets requests a per-rung frontend would issue -- each of them a
+    request that can fail while the room watches.
+    """
+    api = COMMENT.sub(" ", assets["api.js"])
+    assert "export function fetchLadder" in api, (
+        "api.js exports no `fetchLadder`. Every fetch and every endpoint path "
+        "belongs to api.js, and Day 4's ladder is a fetch."
+    )
+    assert "ladder" in api, (
+        "api.js never asks for `ladder=true`, so /interdict would answer in its "
+        "single-k shape and Day 4 would have one rung"
+    )
+
+
+def test_the_ladder_is_installed_as_one_complete_spine(assets):
+    """A spine is installed complete or not at all.
+
+    Half a ladder is a keyboard that works for three presses and then declines
+    silently, which is the one failure worse than a key that is not yet bound.
+    """
+    page = COMMENT.sub(" ", assets["index.html"])
+    assert "fetchLadder" in page, "index.html never fetches the ladder"
+    assert "interdictionSpine" in page, (
+        "index.html never builds the interdiction spine, so the view falls back "
+        "to the one-beat entry spine and every Day 4 key is a no-op"
+    )
+    assert re.search(r'setSpine\(\s*"interdiction"', page), (
+        "nothing installs a spine under the `interdiction` view id"
+    )
+    # The keyboard goes live last, once the spines are installed. Asserted by
+    # position rather than by presence: bound earlier, the arrows are answerable
+    # during the fetch and land on the fallback spine.
+    assert page.index("fetchLadder") < page.index("bindKeys()"), (
+        "the keyboard is bound before the ladder is in hand"
+    )
+
+
+def test_the_shape_of_day_four_comes_off_the_payload(assets):
+    """Ladder length, rung collapse and divergence are server facts.
+
+    Nothing about how long Day 4 is may be decided in JavaScript. The field
+    names are the evidence: a spine built by reading `rungs` and `diverges` is a
+    spine the server's own tests already pinned.
+    """
+    code = " ".join(COMMENT.sub(" ", assets[name])
+                    for name in ("state.js", "render.js", "graph.js", "index.html"))
+    for field in LADDER_FIELDS:
+        assert field in code, (
+            f"no module reads `{field}` off the ladder payload. Day 4's length, "
+            f"its collapsed rungs and its divergences are computed once on the "
+            f"server so that a test can pin them."
+        )
+
+
+def test_the_timeline_flags_a_diverging_rung(assets, stylesheet):
+    """"k=1 agrees, k=2 and k=3 do not", visible without stepping the ladder.
+
+    The flag is a class on the row the spine already emits and a stylesheet
+    `content` -- the same channel the direction glyph uses, for the same reason:
+    one row, one glyph, and no second element the render pass has to keep in
+    step.
+    """
+    assert "diverges" in COMMENT.sub(" ", assets["graph.js"]), (
+        "graph.js writes no divergence class onto a timeline row, so a rung "
+        "where greedy is wrong looks exactly like one where it is not"
+    )
+    rule = re.search(r"#timeline \.beat-row\.diverges[^{]*\{([^}]*)\}", stylesheet)
+    assert rule, (
+        "style.css has no `#timeline .beat-row.diverges` rule; the flag would "
+        "be a class that paints nothing"
+    )
+    assert "content:" in rule.group(1), (
+        "the divergence flag paints no `content`; it is drawn by the stylesheet "
+        "so that no second element has to exist for it"
+    )
+
+
+def test_the_search_counts_are_labelled_searched_and_skipped(assets):
+    """Two labelled numbers, never one number beside a greedy result.
+
+    `subsets_total` on a greedy track is a false claim about work greedy never
+    did, and the counts are the Day 4 number -- how fast the space grows -- so
+    they are labelled rather than left to be inferred from position.
+    """
+    graph = COMMENT.sub(" ", assets["graph.js"])
+    for slot in ("searched", "skipped"):
+        assert re.search(rf'id:\s*"{slot}"', graph), (
+            f"graph.js declares no `{slot}` headline slot"
+        )
+        assert re.search(rf'label:\s*"{slot}"', graph, re.I), (
+            f"the `{slot}` slot is not labelled `{slot}`; an unlabelled count "
+            f"beside a result is read as a claim about that result"
+        )
+
+
+def test_both_tracks_reach_the_headline_as_a_pair(assets):
+    """`140 / 140` -- agreement STATED, not absent.
+
+    A rung with one track on screen is the failure the whole two-track ladder
+    exists to prevent: a student reads the blank half as "greedy wasn't run",
+    and the theater's greedy correctness stops being a theorem about the
+    network's shape and starts looking like luck.
+    """
+    graph = COMMENT.sub(" ", assets["graph.js"])
+    assert re.search(r'id:\s*"tracks"', graph), (
+        "graph.js declares no `tracks` headline slot, so the two tracks' "
+        "residuals have nowhere fixed to be read side by side"
+    )
+    state = COMMENT.sub(" ", assets["state.js"])
+    assert "greedy" in state and "exhaustive" in state, (
+        "state.js reads only one track off a rung; both render on every "
+        "dataset, including the ones where they agree"
+    )
+
+
+def test_the_interdicted_subset_is_a_row_state_and_not_a_second_list(assets):
+    """The blockade is `.removed` rows on the one ledger, with a count above.
+
+    A separate list puts the same lane in the panel twice, in two renderings
+    that can disagree -- and the headline count is read off the very flags that
+    class the rows, so the number and its certificate cannot come apart.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    removed = re.search(r'"removed":\s*([^\n]*)', state)
+    assert removed, "state.js no longer computes a `removed` row state"
+    assert "struck" in removed.group(1), (
+        "the `removed` row state does not include the beat's blockade, so an "
+        "interdicted lane would be drawn only where a THREAT PICTURE removed it"
+    )
+    assert "struck" in re.search(r"marks:\s*\{(.*?)\n  \}", state, re.DOTALL).group(1), (
+        "state.js has no `struck` set in `marks`. The interdicted subset is a "
+        "subset of the lanes, so it lives with the other lane subsets."
+    )
+
+
+def test_carrying_two_tracks_spends_no_new_channel(assets, stylesheet):
+    """No hue, glyph, dash or weight is spent by having two tracks.
+
+    Only one blockade is ever drawn, so `.removed` stays a single row state and
+    the `X` keeps its one meaning. "Attacked" is carried by the A/B flip --
+    the transition is the verb -- because a distinct hue for it costs a role the
+    palette cannot afford.
+    """
+    defined = _defined_tokens(stylesheet)
+    for token in sorted(defined):
+        for banned in ("greedy", "exhaustive", "attack", "interdict", "blockade"):
+            assert banned not in token, (
+                f"{token} spends a channel on Day 4's second track. Only one "
+                f"blockade is ever drawn; the other is stated as a number."
+            )
+    # `.removed` stays ONE row state, so the `X` glyph keeps its one meaning.
+    # Read out of `state.js` and compared against the list this file restates,
+    # because the question is whether the APPLICATION grew a sixth state -- a
+    # comparison against another constant in this file could never answer it.
+    declared = re.search(r"export const ROW_STATES = \[(.*?)\]",
+                         assets["state.js"], re.DOTALL)
+    assert declared, "state.js no longer declares ROW_STATES"
+    assert set(re.findall(r'"([a-z-]+)"', declared.group(1))) == set(ROW_STATES), (
+        "the application's row-state list no longer matches the five this file "
+        "names. Day 4 carries two tracks and must add none: only one blockade "
+        "is ever drawn, and the other track is stated as a number."
+    )
+
+
+def test_the_min_cut_is_on_screen_from_beat_zero(assets):
+    """A budgeted adversary rediscovering the cut is recognition, not a reveal.
+
+    Both halves of the cross-day mashup are the view's entry state, which is
+    also the strongest moment in the unit: Day 3's cut layered over Day 4's
+    interdicted network.
+    """
+    layers = _view_layer_sets(assets["views.js"])["interdiction"]
+    for layer in ("cut", "removed"):
+        assert layer in layers, (
+            f"the interdiction view does not enter with `{layer}` on"
+        )
+    state = COMMENT.sub(" ", assets["state.js"])
+    spine = re.search(r"export function interdictionSpine\b(.*)", state, re.DOTALL)
+    assert spine, "state.js exports no `interdictionSpine`"
+    assert "showCut" in spine.group(1), (
+        "the interdiction spine never draws the cut, so a budgeted adversary "
+        "rediscovering it would read as a surprise reveal rather than as "
+        "recognition"
+    )
+    # And it is the SAME `showCut` the Flow & Cut spine uses. Day 4 draws Day
+    # 3's certificate underneath its own wreckage, and a certificate rendered
+    # from two blocks of code is one that can mean one thing on Wednesday and
+    # another on Thursday.
+    shared = re.search(r"function showCut\b(.*?)\n\}", state, re.DOTALL)
+    assert shared, "state.js has no shared `showCut`"
+    for field in ("cut_lanes", "source_side", "cut_capacity"):
+        assert field in shared.group(1), (
+            f"`showCut` never reads `{field}`, so the certificate on screen is "
+            f"not the one the server computed"
+        )
+    assert len(re.findall(r"showCut\(", state)) >= 3, (
+        "`showCut` is declared and called once; both spines that show a cut "
+        "must go through it"
+    )

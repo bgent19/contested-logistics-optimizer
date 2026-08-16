@@ -77,14 +77,23 @@ export const state = {
    * the same lane sits in the panel twice, in two renderings that can
    * disagree.
    *
-   * Filled by the view tickets (#42-#44). `removed` is deliberately absent:
-   * it is not a set anybody assigns, it is read out of the server's `changes`
-   * block by `isRemoved`. */
+   * Filled by the view tickets (#42-#44). There is deliberately no `removed`
+   * set: a threat picture's removals are not a set anybody assigns, they are
+   * read out of the server's `changes` block by `isRemoved`. `struck` below is
+   * the other source of the same row state and is a set, because a blockade IS
+   * a lane subset the beat names -- off the server's ladder payload, never
+   * chosen here. */
   marks: {
     onPath: new Set(),     /* the augmenting path of the current beat */
     inCut: new Set(),      /* the lanes certifying the min cut */
     violating: new Set(),  /* lanes the naive plan overloads */
     hot: new Set(),        /* whatever the current beat is talking about */
+    /* The blockade this beat draws: the lanes an interdiction took away.
+     * Projected onto the SAME `.removed` row state a threat picture's removals
+     * wear, because on screen they are the same fact -- this lane is gone --
+     * and a second class would spend a channel to say it twice. Only one
+     * blockade is ever drawn, which is what keeps that true. */
+    struck: new Set(),
     /* Lanes this beat's path traverses AGAINST their own direction -- the
      * reverse-arc moment. Not a sixth row state: it is a modifier on `on-path`
      * and never appears without it, which is what keeps a forward traversal
@@ -142,6 +151,32 @@ export const state = {
    * certifying it a single rendering. */
   throughput: null,
   cut: null,
+
+  /**
+   * A rung's two residual throughputs, `{greedy, optimum}`, or `null`.
+   *
+   * The pair is the point, and it is a pair on every dataset including the ones
+   * where the two agree: the theater reads `140 / 140`, `60 / 60`, `0 / 0`.
+   * Agreement STATED is the control case -- a rung with one number on screen is
+   * read as "greedy wasn't run", and the theater's greedy correctness stops
+   * looking like a theorem about the network's shape and starts looking like
+   * luck.
+   *
+   * Both numbers come off the same rung of one payload, so the pair cannot be
+   * two fetches disagreeing about the same k.
+   */
+  tracks: null,
+
+  /**
+   * The subsets one track evaluated and the remainder of the space it did not,
+   * `{searched, skipped}`, or `null`.
+   *
+   * Per track and never per rung: `subsets_total` attached to a greedy result
+   * is a false claim about work greedy never did. The beat showing greedy's
+   * blockade shows greedy's counts, and the beat showing the optimum's shows
+   * the optimum's.
+   */
+  search: null,
 
   /**
    * The node ids on the source side of the min cut, or `null` when no beat is
@@ -333,6 +368,8 @@ export function resolveBeat() {
   for (const set of Object.values(state.marks)) set.clear();
   state.throughput = null;
   state.cut = null;
+  state.tracks = null;
+  state.search = null;
   state.sourceSide = null;
   state.delta = null;
   /* The trace slice goes with the rest. A beat that inherited the last beat's
@@ -631,6 +668,33 @@ function bindingLane(step) {
   return at === -1 ? null : `${step.path[at]}→${step.path[at + 1]}`;
 }
 
+/**
+ * Draw the min cut: its capacity, the partition it defines and the lanes
+ * certifying it -- all off ONE `/maxflow` response.
+ *
+ * Shared by both spines that show a cut, which is the point rather than a
+ * convenience. Max-flow/min-cut says the capacity must equal the throughput,
+ * and Day 4 draws Day 3's certificate underneath its own wreckage: two views
+ * rendering the same certificate from two blocks of code is how the cut ends up
+ * meaning one thing on Wednesday and another on Thursday. The ladder payload's
+ * own `min_cut_capacity` is deliberately never the number displayed.
+ *
+ * `hot` is the one thing the two views differ on, and it is a question about
+ * whose subject the cut is: on Flow & Cut the cut IS the beat, and on the
+ * interdiction ladder it is the board the adversary is working against, where
+ * the emphasis belongs to the blockade.
+ */
+function showCut(current, payload, laneOf, hot) {
+  current.cut = payload.cut_capacity;
+  current.sourceSide = new Set(payload.source_side);
+  for (const lane of payload.cut_lanes) {
+    const found = laneOf(lane.src, lane.dst);
+    if (!found) continue;
+    current.marks.inCut.add(found.edgeId);
+    if (hot) current.marks.hot.add(found.edgeId);
+  }
+}
+
 /** Switch a beat's layers, by id, over whatever the view's entry table gave. */
 function setLayers(current, on, off) {
   for (const id of on) current.layers.add(id);
@@ -733,19 +797,240 @@ export function flowCutSpine(payload, laneOf) {
       current.throughput = payload.max_throughput;
       /* Both off ONE response. Max-flow min-cut says these must be equal, and
        * two numbers that must be equal, fetched by two routes, are a
-       * contradiction waiting for a projector. */
-      current.cut = payload.cut_capacity;
-      current.sourceSide = new Set(payload.source_side);
-      for (const lane of payload.cut_lanes) {
-        const found = laneOf(lane.src, lane.dst);
-        if (found) {
-          current.marks.inCut.add(found.edgeId);
-          current.marks.hot.add(found.edgeId);
-        }
-      }
+       * contradiction waiting for a projector. Hot, because on this beat the
+       * cut is the subject rather than the backdrop. */
+      showCut(current, payload, laneOf, true);
       setLayers(current, ["cut"], ["residual", "path"]);
     },
   });
+
+  return beats;
+}
+
+/* ---- the Interdiction spine (issue #43) -----------------------------------
+ *
+ * Two payloads in, one complete spine out, and the second one is not optional:
+ * the ladder says which lanes the adversary takes, and `/maxflow` says which
+ * lanes certify the min cut. The cut is on screen from beat 0 so that a
+ * budgeted adversary rediscovering it reads as RECOGNITION rather than as a
+ * surprise reveal -- which is also the cross-day mashup the layer catalog is
+ * global for, Day 3's certificate over Day 4's wreckage.
+ *
+ * Pure, like the Flow & Cut spine above, and under the same standing ban: every
+ * number here is copied off a payload. Nothing about how long Day 4 is, which
+ * rungs collapsed or which of them diverge is decided in this file -- those are
+ * server facts with tests of their own, and a second implementation of the stop
+ * rule in a render pass would disagree with the CLI on the one dataset nobody
+ * checked.
+ */
+
+/**
+ * A rung's budget, as the label names it -- `2`, or `2-3` where the server
+ * collapsed two budgets onto one picture.
+ *
+ * The collapse is the server's and the range is READ rather than detected: a
+ * rung is a picture, and the same picture under two labels is a slide the class
+ * reads as progress that did not happen. No shipped dataset collapses a rung
+ * today -- while throughput is positive each extra unit of budget strictly
+ * improves both tracks -- so this is the guard reporting idle, and the label is
+ * what would tell the room if it ever stopped being idle.
+ */
+function rungBudget(rung) {
+  return rung.k_through > rung.k ? `${rung.k}-${rung.k_through}` : `${rung.k}`;
+}
+
+/** A blockade's lanes, named as the room hears them: `A→B`, in payload order. */
+function blockadeNames(removed) {
+  return removed.map((lane) => `${lane.src}→${lane.dst}`).join(", ");
+}
+
+/**
+ * A blockade's lanes as edge ids, resolved once when the spine is BUILT.
+ *
+ * Resolved here rather than inside a beat's `apply` for the same reason
+ * everything else in this application is prefetched: a failure at build time
+ * happens while the page is loading, and a failure inside `apply` happens on
+ * the keypress that reaches it.
+ *
+ * And it throws rather than skipping. Every lane an interdiction names is a
+ * stored lane -- unlike a trace path, which legitimately walks terminal arcs
+ * that have no lane and no edge id -- so a miss here is the payload and the
+ * drawn network disagreeing about what this theater contains. Skipped, it would
+ * drop the lane from the picture AND from the `Struck` count, which is read off
+ * the row flags: a headline number quietly too small, with nothing raised
+ * anywhere. A blank page during setup is recoverable; that is not.
+ */
+function blockadeIds(removed, laneOf) {
+  return removed.map((lane) => {
+    const found = laneOf(lane.src, lane.dst);
+    if (!found) {
+      throw new Error(
+        `/interdict removed ${lane.src}→${lane.dst}, which this network has no `
+        + `lane for -- the ladder and the drawn theater disagree`,
+      );
+    }
+    return found.edgeId;
+  });
+}
+
+/**
+ * Heat a blockade's lanes, and strike them out if the blockade is drawn.
+ *
+ * Every blockade the ladder names is HOT -- it is what the beat is talking
+ * about, whether it is greedy's guess on the live network or the optimum's
+ * verdict. Only the drawn one is also `struck`, and only one is ever drawn.
+ */
+function markBlockade(current, edgeIds, drawn) {
+  for (const edgeId of edgeIds) {
+    current.marks.hot.add(edgeId);
+    if (drawn) current.marks.struck.add(edgeId);
+  }
+}
+
+/**
+ * The Interdiction spine: the pristine cut, then two beats per budget level.
+ *
+ * **The coarse unit is the budget level *k***, which is what the instructor
+ * says out loud -- "budget two", never "beat five" -- so the digit keys mean
+ * what the room hears. The rungs' own `k` values are not read as ordinals
+ * anywhere: `unitCount` and the digit keys address units by POSITION, which is
+ * what lets a ladder numbered from 1, or one with a rung collapsed out of the
+ * middle, still answer `2` with its second rung.
+ *
+ * The pristine network is folded into the first rung rather than given a unit
+ * of its own, exactly as Flow & Cut folds its own opening beat in, and at the
+ * same accepted cost: `1` lands on the untouched theater rather than on budget
+ * 1's first blockade. It buys a digit key that names the budget it names on the
+ * board.
+ *
+ * **Greedy's blockade first, then the optimum's** -- hypothesis, then verdict.
+ * Greedy's pick is the one the room can predict from the board, because it is
+ * just the biggest lane, so it is the guess the instructor invites them to make
+ * out loud; reversing the order would put the answer on screen before the
+ * question. It also leaves the rung's LAST beat holding the true residual, so
+ * stepping to the next *k* departs from the correct picture rather than from
+ * greedy's stall.
+ *
+ * Accepted costs, stated so they are not later read as bugs: a diverging rung
+ * shows a wrong answer first and lives with it for both of its beats, the panel
+ * never shows both blockades at once, and the spatial punchline -- greedy at
+ * the source, the optimum at the sink -- becomes a comparison across a keypress.
+ */
+export function interdictionSpine(ladder, maxflow, laneOf) {
+  const rungs = ladder.rungs || [];
+  if (!rungs.length) return [];
+
+  /* The certificate, on every beat of the ladder and never hot: the cut is the
+   * board the adversary is working against, and the emphasis belongs to the
+   * blockade. Shared with the Flow & Cut spine so the two views cannot render
+   * the same certificate differently. */
+  const cut = (current) => showCut(current, maxflow, laneOf, false);
+
+  /* The untouched theater's throughput, off the SAME response as the cut
+   * capacity it must equal.
+   *
+   * `ladder.baseline_throughput` is the same quantity and is deliberately not
+   * the one displayed, for the reason `min_cut_capacity` is not either: on the
+   * pristine beat this number and the cut sit one slot apart on the dashboard,
+   * max-flow/min-cut says they must be equal, and two numbers that must be
+   * equal, fetched by two routes, are a contradiction waiting for a projector.
+   * The only ladder numbers that reach the screen are ones no other response
+   * also computes -- the residuals, the counts and the divergence flag. */
+  const baseline = maxflow.max_throughput;
+
+  const beats = [{
+    unit: rungs[0].k,
+    phase: "pristine",
+    label: `Pristine theater: min cut ${maxflow.cut_capacity}`,
+    apply: (current) => {
+      cut(current);
+      current.throughput = baseline;
+    },
+  }];
+
+  for (const rung of rungs) {
+    /* Both tracks' residuals, on both beats of the rung. The pair is what makes
+     * agreement a statement rather than an absence, and it stands through the
+     * whole rung so that the guess and the verdict are read against each other
+     * rather than one replacing the other. */
+    const tracks = {
+      greedy: rung.greedy.residual_throughput,
+      optimum: rung.exhaustive.residual_throughput,
+    };
+    /* `diverges` is the server's flag, carried onto both of the rung's rows so
+     * the timeline can say "k=1 agrees, k=2 and k=3 do not" without the ladder
+     * being stepped. It compares the removed SETS rather than the residuals --
+     * at k=3 on the trap both tracks read zero and the sets differ by a whole
+     * lane, and a residual comparison would call that agreement and erase the
+     * lesson. That comparison is the server's, and it stays there. */
+    const diverges = rung.diverges;
+    const budget = rungBudget(rung);
+    /* Both blockades resolved to edge ids up front, so a lane the diagram
+     * cannot draw fails while the page is loading rather than on the keypress
+     * that reaches it. */
+    const guess = blockadeIds(rung.greedy.removed, laneOf);
+    const verdict = blockadeIds(rung.exhaustive.removed, laneOf);
+
+    /* beat a -- the hypothesis: greedy's chosen lane set, on the LIVE network.
+     * The lanes are hot rather than struck, and the throughput is still the
+     * baseline: nothing has been taken away yet, and the room is being asked to
+     * predict what happens when it is. */
+    beats.push({
+      unit: rung.k,
+      phase: "a",
+      diverges,
+      label: `Budget ${budget}: greedy takes ${blockadeNames(rung.greedy.removed)}`,
+      apply: (current) => {
+        cut(current);
+        current.throughput = baseline;
+        current.tracks = tracks;
+        current.search = {
+          searched: rung.greedy.searched,
+          skipped: rung.greedy.skipped,
+        };
+        markBlockade(current, guess, false);
+      },
+    });
+
+    /* beat b -- the verdict: the optimum's blockade, removed, and what that
+     * costs. The A/B pair is claimed here and this is the view it belongs to:
+     * the two states are never simultaneously visible, "attacked" is carried by
+     * the flip because THE TRANSITION IS THE VERB, and one pair the instructor
+     * can say out loud beats a per-lane delta column nobody can. */
+    beats.push({
+      unit: rung.k,
+      phase: "b",
+      diverges,
+      label: `Budget ${budget}: optimum removes `
+        + `${blockadeNames(rung.exhaustive.removed)}, `
+        + `throughput ${rung.exhaustive.residual_throughput}`,
+      apply: (current) => {
+        cut(current);
+        current.throughput = rung.exhaustive.residual_throughput;
+        current.tracks = tracks;
+        current.search = {
+          searched: rung.exhaustive.searched,
+          skipped: rung.exhaustive.skipped,
+        };
+        markBlockade(current, verdict, true);
+        current.delta = {
+          label: "Throughput",
+          before: baseline,
+          after: rung.exhaustive.residual_throughput,
+        };
+      },
+    });
+  }
+
+  /* A ladder that stopped at the budget ceiling rather than at a severed
+   * network says so, on the last row the timeline shows. `terminated` is the
+   * server's flag and this is the only thing the view does with it: untold, the
+   * final rung reads as "and then the network was severed", which is the one
+   * claim a truncated ladder cannot make. */
+  if (!ladder.terminated) {
+    const last = beats[beats.length - 1];
+    last.label = `${last.label} — ladder truncated at the budget ceiling`;
+  }
 
   return beats;
 }
@@ -806,7 +1091,12 @@ export function anyHot(current = state) {
 export function laneStates(current, changes, edgeId) {
   const emphasised = current.marks.hot.has(edgeId) || current.pinned === edgeId;
   return {
-    "removed": isRemoved(changes, edgeId),
+    /* Two sources, one state. A threat picture removes a lane by zeroing its
+     * capacity in `changes`; an interdiction removes it by naming it in the
+     * ladder payload. Both are the server saying the lane is gone, and on
+     * screen "gone" is one thing -- struck out, greyed, `X` -- so it is one
+     * flag and one class rather than two that would have to agree. */
+    "removed": isRemoved(changes, edgeId) || current.marks.struck.has(edgeId),
     "in-cut": current.marks.inCut.has(edgeId),
     "violating": current.marks.violating.has(edgeId),
     "on-path": current.marks.onPath.has(edgeId),

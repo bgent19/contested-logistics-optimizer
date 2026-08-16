@@ -352,9 +352,9 @@ html, body {
 }
 
 /* ---- the headline -------------------------------------------------------- */
-/* Six fixed slots on a three-column grid, so each number keeps its position
- * for the whole unit. `min-width: 0` on the cells is what stops a long value
- * widening its column and shuffling the other five. */
+/* Fixed slots on a three-column grid, so each number keeps its position for the
+ * whole unit. `min-width: 0` on the cells is what stops a long value widening
+ * its column and shuffling the others. */
 #headline-stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -367,6 +367,12 @@ html, body {
   display: flex;
   flex-direction: column;
 }
+
+/* The one pair-valued slot takes two columns. A pair is two numbers and a
+ * separator in a cell sized for one number, and the grid's whole promise is
+ * that nothing shuffles between beats -- so the space is reserved rather than
+ * found at render time. */
+.stat.wide { grid-column: span 2; }
 
 .stat-label {
   font-size: var(--panel-type-label);
@@ -527,6 +533,22 @@ html, body {
 #timeline .beat-row.current {
   border-left-color: var(--panel-tick-hot);
   color: var(--panel-ink);
+}
+
+/* Day 4's divergence flag: this rung is one where greedy is wrong.
+ *
+ * Drawn as `content` on the row that already exists, exactly like the ledger's
+ * direction glyph and for the same reason -- one row, one glyph, and no second
+ * element for the render pass to keep in step. The point of putting it on the
+ * ROW rather than only in the picture is that "k=1 agrees, k=2 and k=3 do not"
+ * is then readable off the panel without the ladder being stepped.
+ *
+ * It spends no hue: the glyph is the channel, and the colour is the same muted
+ * ink the row already carries. A second track that cost a categorical role
+ * would be a role the palette cannot afford. */
+#timeline .beat-row.diverges::after {
+  content: " \2260";
+  margin-left: 4px;
 }
 
 /* ---- the diagram --------------------------------------------------------- */
@@ -792,6 +814,11 @@ html, body {
  * `.show-flow` here is what put unbacked numerals on the opening screen once
  * already. */
 .show-flow .plate-flow { display: inline; }
+/* ...and a plate with nothing on it is not backing anything. A beat that knows
+ * no flow for a lane -- Day 4 knows none for any of them -- would otherwise
+ * draw a rectangle where a numeral was expected, which is the unbacked-numeral
+ * failure with its two halves swapped. */
+.show-flow .plate-flow.off { display: none; }
 .show-caps .plate-stat,
 .show-costrisk .plate-stat { display: inline; }
 
