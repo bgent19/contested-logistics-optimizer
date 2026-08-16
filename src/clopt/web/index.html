@@ -379,11 +379,7 @@
       PageUp:     () => stepBeat(-1),
       ArrowDown:  () => stepUnit(1),
       ArrowUp:    () => stepUnit(-1),
-      // `R` clears the picture along with everything else, so the spines it
-      // leaves standing were built from the picture it just dropped. Re-applying
-      // is what makes the reset land somewhere the panel and the ladder agree
-      // about.
-      KeyR:       () => { resetView(); applyThreat(); },
+      KeyR:       () => resetToBaseline(),
       // The two cycling axes, both of which PRESERVE THE BEAT INDEX -- park on
       // a detent, cycle the picture, and watch the same plan buckle. `T` is
       // synchronous because every picture's payloads were prefetched with the
@@ -438,13 +434,23 @@
      * differently. Synchronous by construction: the payloads are already in
      * hand, and every spine builder is pure.
      *
-     * **No structural DOM change happens here, and none may.** The diagram is
+     * **The topology pass does not run here, and must not.** The diagram is
      * built once per dataset, so a threat picture only ever changes classes and
-     * text on elements that already exist -- rebuilding the topology pass would
-     * throw away every handle the render pass reaches a lane through. The beat
-     * timeline's rows are rebuilt by `repaint`, and that is not the same thing:
-     * a spine's length genuinely moves under a picture, which is exactly why
-     * `setSpine` clamps the beat index rather than resetting it.
+     * text on the lanes and nodes that already exist -- rebuilding them would
+     * throw away every handle the render pass reaches a lane through, and the
+     * two would only be seen to disagree once some state was set, which is to
+     * say in front of a room.
+     *
+     * ONE structural change does follow, and it is accepted rather than
+     * overlooked: `repaint` rebuilds the beat timeline's rows, because the
+     * spines installed here are new arrays. That is not the topology pass and
+     * it is not avoidable -- a picture genuinely changes how long the story is
+     * (the theater's ladder is three rungs pristine and two under
+     * `strait_mined`), so rows have to appear or go. It is exactly the same
+     * reason `setSpine` clamps the beat index rather than trusting it, and the
+     * rows are the one thing on the page whose count is allowed to move. The
+     * identity guard in `repaint` is what keeps it to spine changes alone,
+     * rather than every keypress.
      */
     function applyThreat() {
       const built = payloads.get(state.threat || BASELINE);
@@ -462,6 +468,20 @@
       frontier = paretoRows(built.sweep, built.naive);
     }
 
+    /* `R`: the full reset, finished.
+     *
+     * `resetView` clears the threat picture along with the beat and the hand
+     * toggles, which leaves the spines on screen built from the picture it just
+     * dropped -- a panel captioned pristine over a disrupted ladder. Re-applying
+     * is the other half of the reset, and it is a NAMED function rather than two
+     * calls inline so that there is one spelling of "reset" for any later
+     * control to reach for. `resetView` alone is never the whole act.
+     */
+    function resetToBaseline() {
+      resetView();
+      applyThreat();
+    }
+
     /* `D`: the next dataset, carrying what the target can express.
      *
      * Through the same `load` the first paint uses, rather than a second build
@@ -475,10 +495,36 @@
       // the menu beside the key is showing its own single entry, so the reason
       // is already on screen where the instructor is looking.
       if (next === null) return;
-      stashThreat();
-      await load(next);
-      // The menu follows the state, like every other control on this page.
-      select.value = next;
+      await switchDataset(next);
+    }
+
+    /* Leave the current dataset for another, remembering the picture.
+     *
+     * THE ONE ROUTE, shared by the `D` key and the menu, because they are the
+     * same act and a second spelling of it is one that can drift -- a menu
+     * change that forgot the stash would silently lose the picture the key
+     * would have remembered.
+     *
+     * Guarded against re-entry, which matters for exactly this key: `D` is
+     * designed to be pressed twice in quick succession -- that is how the
+     * instructor comes home at two datasets -- and `load` is a long await that
+     * rebuilds the diagram and replaces the payload store. Two of them
+     * interleaved would build one dataset's DOM against another's payloads. A
+     * dropped press is recoverable in a way that is not.
+     */
+    let switching = false;
+
+    async function switchDataset(datasetId) {
+      if (switching) return;
+      switching = true;
+      try {
+        stashThreat();
+        await load(datasetId);
+        // The menu follows the state, like every other control on this page.
+        select.value = datasetId;
+      } finally {
+        switching = false;
+      }
     }
 
     async function load(datasetId) {
@@ -562,13 +608,9 @@
         option.textContent = dataset.name;
         select.appendChild(option);
       }
-      // Pointer parity with `D`, stash included: the menu must not be a second
-      // route to a dataset switch that forgets the picture the key would have
-      // remembered.
-      select.addEventListener("change", () => {
-        stashThreat();
-        load(select.value);
-      });
+      // Pointer parity with `D`, through the same function: the menu is not a
+      // second route to a dataset switch, it is the same one named differently.
+      select.addEventListener("change", () => switchDataset(select.value));
 
       buildControls();
       bindLedger();

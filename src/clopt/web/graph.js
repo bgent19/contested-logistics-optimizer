@@ -195,6 +195,7 @@ export const frozen = {
   anchors: new Map(),      /* edgeId -> {x, y} */
   crossings: [],           /* {point, angle, lanes: [edgeId, edgeId]} */
   directed: new Map(),     /* "src>dst" -> {edgeId, stored, against} */
+  incident: new Map(),     /* nodeId -> [edgeId, ...] of the lanes touching it */
   terminalLinks: [],       /* {nodeId, role} for each derived S/T arc */
 };
 
@@ -304,6 +305,32 @@ function directedLookup(edges) {
     if (edge.bidirectional) {
       map.set(`${edge.dst}>${edge.src}`,
               { edgeId: edge.id, stored: false, against: false });
+    }
+  }
+  return map;
+}
+
+/**
+ * Which stored lanes touch each node, `nodeId -> [edgeId, ...]`.
+ *
+ * Structure, so it is solved once here with the crossings and the anchors
+ * rather than rebuilt inside a render pass. It is frozen for the same reason
+ * they are: the lanes touching a node are a fact about the authored file, and
+ * no threat picture, beat or view moves them -- a picture zeroes a lane's
+ * capacity, which is a fact about the lane's numbers and not about the shape of
+ * the graph.
+ *
+ * Its one consumer is `severedNodes`, which asks whether every lane touching a
+ * node has been removed. A node with no lanes at all never enters the map,
+ * which is right: it was already isolated in the pristine network, so nothing
+ * was taken from it.
+ */
+function incidenceLookup(edges) {
+  const map = new Map();
+  for (const edge of edges) {
+    for (const nodeId of [edge.src, edge.dst]) {
+      if (!map.has(nodeId)) map.set(nodeId, []);
+      map.get(nodeId).push(edge.id);
     }
   }
   return map;
@@ -643,6 +670,7 @@ export function buildGraph(svg, payload) {
   frozen.crossings = crossingSolve(network.edges, positions);
   frozen.anchors = anchorSolve(network.edges, positions, frozen.crossings);
   frozen.directed = directedLookup(network.edges);
+  frozen.incident = incidenceLookup(network.edges);
   frozen.terminalLinks = terminalLinks(network.nodes);
 
   const xs = [...positions.values()].map((point) => point.x);

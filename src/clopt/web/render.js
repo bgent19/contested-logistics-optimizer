@@ -21,7 +21,7 @@
 
 import { frozen, geometry, handles, SUPER_SINK, SUPER_SOURCE } from "./graph.js";
 import { edgeChanges, isRemoved, laneStates, nodeStates, NODE_STATES,
-         ROW_STATES, severedNodes } from "./state.js";
+         ROW_STATES, severedNodes, SEVERED } from "./state.js";
 
 /** The em dash an empty headline slot shows. A slot is never blank: a gap
  *  reads as a number that failed to arrive, where "—" reads as "not on this
@@ -571,9 +571,11 @@ export function render(state) {
 
   /* -- nodes --------------------------------------------------------------- */
   /* The hubs this picture has cut off, read out of the same `changes` block the
-   * lanes above were struck from -- built once for the whole pass, so every
-   * node is judged against the same map exactly as every lane was. */
-  const severed = severedNodes(state, changes);
+   * lanes above were struck from, over the frozen incidence index -- so every
+   * node is judged against the same map exactly as every lane was, and the
+   * question "which lanes touch this node" is answered from the topology pass
+   * rather than re-derived on every keypress. */
+  const severed = severedNodes(frozen.incident, changes);
 
   for (const [nodeId, bundle] of handles.nodes) {
     const point = positions.get(nodeId);
@@ -593,19 +595,19 @@ export function render(state) {
     const flags = nodeStates(state, nodeId);
     if (flags.overdrawn) certificates.overdrawn += 1;
 
-    /* Severance is not one of `NODE_STATES` and must not become one. Those
-     * three are Day 1's plan failures -- facts about an ALLOCATION, cleared and
-     * rebuilt on every beat -- where this is a fact about the network under the
-     * active picture, true on every beat of all three views until `T` is
-     * pressed again. Filed with them, it would be wiped by the next `resolveBeat`
-     * and a severed hub would flicker back to healthy on the next keypress.
+    /* Severance is its own class rather than a fourth `NODE_STATE`, for the
+     * reason recorded beside `SEVERED` in state.js: those three are per-beat
+     * plan failures and this is a fact about the network under the active
+     * picture.
      *
      * Counted here, from the very set that classes the node, so the figure
      * under `Supply` and the struck hubs certifying it are one rendering.
      * Supply nodes only: the count sits under the supply figure and is a claim
-     * about it, and a severed transit node has no stock to strand. */
+     * about it. A severed transit node is still greyed -- nothing can move
+     * through it either, and saying so is true -- but it has no stock to
+     * strand, so counting it would inflate a number about supply. */
     const isSevered = severed.has(nodeId);
-    bundle.group.classList.toggle("severed", isSevered);
+    bundle.group.classList.toggle(SEVERED, isSevered);
     if (isSevered && bundle.node.kind === "supply") certificates.severed += 1;
     for (const name of NODE_STATES) {
       bundle.group.classList.toggle(name, flags[name]);

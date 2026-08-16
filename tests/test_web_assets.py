@@ -1972,13 +1972,37 @@ def test_t_performs_no_structural_dom_change(assets):
     cycle = re.search(r"async function cycleDataset\(\)\s*\{(.*?)\n    \}", page,
                       re.DOTALL)
     assert cycle, "index.html has no `cycleDataset()`"
-    assert "load(" in cycle.group(1), (
-        "`cycleDataset` does not go through `load`, so a `D` switch would be a "
+    assert "switchDataset" in cycle.group(1), (
+        "`cycleDataset` does not go through `switchDataset`, which is the one "
+        "route a dataset switch takes -- the menu uses it too, and a second "
+        "spelling is one that can forget the stash the key remembers"
+    )
+    switch = re.search(r"async function switchDataset\(\w*\)\s*\{(.*?)\n    \}",
+                       page, re.DOTALL)
+    assert switch, "index.html has no `switchDataset()`"
+    assert "load(" in switch.group(1), (
+        "the dataset switch does not go through `load`, so `D` would be a "
         "second build path beside the one the first paint uses"
     )
-    assert "stashThreat" in cycle.group(1), (
-        "`cycleDataset` does not stash the picture before leaving, so the Day 2 "
-        "excursion could not come home to the picture it left"
+    assert "stashThreat" in switch.group(1), (
+        "the dataset switch does not stash the picture before leaving, so the "
+        "Day 2 excursion could not come home to the picture it left"
+    )
+    # `D` is designed to be pressed twice in quick succession -- that is how the
+    # instructor comes home at two datasets -- and `load` is a long await that
+    # rebuilds the diagram and replaces the payload store. Two interleaved would
+    # build one dataset's DOM against another's payloads.
+    assert "switching" in switch.group(1), (
+        "`switchDataset` is unguarded against re-entry. Leaning on `D` would "
+        "interleave two loads over one payload store and one topology pass."
+    )
+    # The topology pass has exactly ONE caller, and it is the dataset load. This
+    # is the assertion that actually pins the rule -- reading `applyThreat`'s
+    # body alone could not see a rebuild reached some other way.
+    assert len(re.findall(r"\bbuildGraph\(", page)) == 1, (
+        "the topology pass is reached from more than one place in index.html. "
+        "The diagram is built once per dataset, by the loader, and a second "
+        "caller is a second answer to when the handles are valid."
     )
 
 

@@ -597,9 +597,12 @@ export function resetView() {
    * reset it advertises: the threat would come back on the next round trip
    * through `D`, from a stash the instructor has no control over.
    *
-   * Note that the caller must re-apply the threat after this -- the spines on
-   * screen were built from the old picture's payloads, and clearing the field
-   * alone would leave the panel captioned pristine over a disrupted ladder. */
+   * THIS FUNCTION IS HALF OF `R`. Clearing the field cannot re-solve the
+   * theater, so the driver must re-apply the picture afterwards or the spines
+   * on screen stay the disrupted ones under a panel captioned pristine. That is
+   * why the page reaches this through one named `resetToBaseline` rather than
+   * calling it directly -- there is one spelling of the whole act, and this is
+   * not it. */
   state.threatByDataset.delete(state.dataset);
   state.beat = 0;
   state.layerOverrides.clear();
@@ -747,6 +750,12 @@ export function cycleThreat() {
  * by removing its lanes one at a time just as it catches `remove_node`, which
  * reading the declarations would not.
  *
+ * `incident` is the frozen `nodeId -> [edgeId]` index, handed in rather than
+ * built here and rather than imported: which lanes touch a node is TOPOLOGY,
+ * solved once per dataset by the module that owns structure, and taking it as
+ * an argument keeps this module free of any dependency on that one -- the same
+ * import direction that keeps `laneOf` a parameter of every spine builder.
+ *
  * This exists because **removing a node leaves its quantity intact**. The hub
  * still reports its stock and the network still reports full total supply, so a
  * panel with nothing to say about it would sit there reading unchanged beside a
@@ -754,23 +763,29 @@ export function cycleThreat() {
  * instructor is making the opposite point. The answer is a mark and a count in
  * the panel, never a mutated total: the figure is the server's.
  */
-export function severedNodes(current, changes) {
+export function severedNodes(incident, changes) {
   const severed = new Set();
-  if (!current.scenario || !changes.size) return severed;
-  const incident = new Map();
-  for (const edge of current.scenario.network.edges) {
-    for (const nodeId of [edge.src, edge.dst]) {
-      if (!incident.has(nodeId)) incident.set(nodeId, []);
-      incident.get(nodeId).push(edge.id);
-    }
-  }
-  /* A node with no lanes at all never enters the map, which is right: it was
-   * already isolated in the pristine network, and nothing was taken from it. */
+  if (!changes.size) return severed;
   for (const [nodeId, lanes] of incident) {
     if (lanes.every((edgeId) => isRemoved(changes, edgeId))) severed.add(nodeId);
   }
   return severed;
 }
+
+/**
+ * The class a severed node wears, named here beside `NODE_STATES` rather than
+ * written as a literal in the render pass.
+ *
+ * It is deliberately NOT a member of that list, and the reason is the whole
+ * distinction: those three are Day 1's plan failures -- facts about an
+ * ALLOCATION, cleared and rebuilt by `resolveBeat` on every beat -- where this
+ * is a fact about the network under the active picture, true on every beat of
+ * all three views until `T` is pressed again. Filed with them it would be wiped
+ * by the next beat, and a severed hub would flicker back to healthy on the next
+ * keypress. Named all the same, so a fourth state here is still one edit plus
+ * its stylesheet rule.
+ */
+export const SEVERED = "severed";
 
 /**
  * Pin one lane hot, or unpin it if it is already the pinned one.
