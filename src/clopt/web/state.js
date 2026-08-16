@@ -85,7 +85,48 @@ export const state = {
     inCut: new Set(),      /* the lanes certifying the min cut */
     violating: new Set(),  /* lanes the naive plan overloads */
     hot: new Set(),        /* whatever the current beat is talking about */
+    /* Lanes this beat's path traverses AGAINST their own direction -- the
+     * reverse-arc moment. Not a sixth row state: it is a modifier on `on-path`
+     * and never appears without it, which is what keeps a forward traversal
+     * unmarked. It drives two things from one set, so the ledger's glyph and
+     * the canvas's promoted arc can never disagree about which way a lane was
+     * walked. */
+    against: new Set(),
   },
+
+  /* ---- the current beat's slice of the trace ------------------------------
+   * Both are READ off the server's trace and never derived here. `cap - flow`
+   * is the subtraction this pair exists to make unnecessary: one line, correct
+   * on the happy path, and silently disagreeing with the API the moment a
+   * threat picture or a rounding rule moves underneath it.
+   *
+   * Set by a beat's `apply` and cleared by `resolveBeat` along with everything
+   * else derived, so a beat renders identically however it was reached. */
+
+  /** `edgeId -> flow` at this beat, covering every lane including saturated
+   *  ones -- which the residual lists cannot say, because they drop an arc the
+   *  moment it saturates. */
+  flows: new Map(),
+
+  /** `edgeId -> {forward, reverse}` residual capacity at this beat. A missing
+   *  side means no residual arc in that direction, not a zero to draw. */
+  residuals: new Map(),
+
+  /** The bottleneck of the augmentation being proposed, or `null`. */
+  bottleneck: null,
+
+  /**
+   * The augmenting path of this beat as the server named it: node ids, super-
+   * source first and super-sink last, or empty.
+   *
+   * Kept as the raw node list beside `marks.onPath` rather than instead of it,
+   * because the two answer different questions. The ledger needs the set of
+   * LANES; the canvas needs the ORDERED walk, terminals included -- and the
+   * terminal arcs have no lane and no edge id, so a set of edge ids cannot
+   * describe them. Dropping them is what once made a path appear to begin in
+   * the middle of the graph.
+   */
+  path: [],
 
   /** The lane pinned hot by a click, or `null`. See `pinLane`. */
   pinned: null,
@@ -101,6 +142,18 @@ export const state = {
    * certifying it a single rendering. */
   throughput: null,
   cut: null,
+
+  /**
+   * The node ids on the source side of the min cut, or `null` when no beat is
+   * showing a cut.
+   *
+   * A set of NODES rather than the lanes, because the certificate is a
+   * partition of the graph: the lane list is what the partition implies, not
+   * the other way round, and shading the two sides is what stops the cut
+   * reading as an arbitrary set of marked lanes. Server-computed and read --
+   * `source_side` off the same `/maxflow` response that carried `cut`.
+   */
+  sourceSide: null,
 
   /**
    * The one A/B headline pair: `{label, before, after}`, or `null`.
@@ -280,7 +333,15 @@ export function resolveBeat() {
   for (const set of Object.values(state.marks)) set.clear();
   state.throughput = null;
   state.cut = null;
+  state.sourceSide = null;
   state.delta = null;
+  /* The trace slice goes with the rest. A beat that inherited the last beat's
+   * flows would draw the right picture forwards and the wrong one backwards,
+   * which is the exact failure the idempotence rule exists to make impossible. */
+  state.flows.clear();
+  state.residuals.clear();
+  state.bottleneck = null;
+  state.path = [];
   state.layers = layersForView(state.view);
 
   const beat = spine()[state.beat];
@@ -483,6 +544,214 @@ export function edgeChanges(current = state) {
 export function isRemoved(changes, edgeId) {
   const change = changes.get(edgeId);
   return Boolean(change) && change.cap === 0;
+}
+
+/* ---- the Flow & Cut spine (issue #42) -------------------------------------
+ *
+ * One `/maxflow?trace=true` payload in, one complete spine out. Pure: it reads
+ * the payload and closes over it, and every `apply` below only ever *copies*
+ * numbers the server computed onto the state object. There is no arithmetic
+ * here and there must never be -- a residual or a flow derived in JavaScript is
+ * a number on the projector the API can disagree with, discovered when it
+ * contradicts an answer the same tool gave a minute earlier.
+ *
+ * The lane lookup is passed in rather than imported. `graph.js` owns it, but it
+ * is frozen geometry rather than DOM, and taking it as an argument keeps this
+ * module free of any dependency on the module that builds elements -- the same
+ * import direction that keeps the render pass from appending.
+ */
+
+/**
+ * Copy one trace step's residuals and per-edge flows onto the state.
+ *
+ * The uniform render rule this exists to serve: **residuals from step k-1,
+ * path annotation from step k**. Which is why the server prepends a step 0 --
+ * iteration 1 otherwise has no "before" to draw against, and synthesising one
+ * here would be residual-graph construction in the browser.
+ */
+function showStep(current, step, laneOf) {
+  for (const arc of step.flows) {
+    const lane = laneOf(arc.src, arc.dst);
+    /* Only the arc drawn in the lane's stored orientation sets the lane's flow.
+     * A bidirectional lane is ONE stored edge and TWO solver arcs, so without
+     * this the second arc would overwrite the first and which number survived
+     * would depend on payload order. */
+    if (lane && lane.stored) current.flows.set(lane.edgeId, arc.flow);
+  }
+  /* Both residual lists into one map: an arc is an arc, and what decides which
+   * side of the lane it is drawn on is its direction, not which list the
+   * solver filed it under. `null` is an unbounded terminal arc -- no numeral
+   * and no mark, which is correct anyway. */
+  for (const arc of [...step.forward_residual, ...step.reverse_residual]) {
+    const lane = laneOf(arc.src, arc.dst);
+    if (!lane || arc.residual === null) continue;
+    const entry = current.residuals.get(lane.edgeId) || {};
+    entry[lane.stored ? "along" : "counter"] = arc.residual;
+    current.residuals.set(lane.edgeId, entry);
+  }
+}
+
+/** Mark the lanes of one step's augmenting path, and which way each was walked. */
+function showPath(current, step, laneOf) {
+  current.path = step.path;
+  current.bottleneck = step.bottleneck;
+  for (let i = 0; i + 1 < step.path.length; i += 1) {
+    const lane = laneOf(step.path[i], step.path[i + 1]);
+    if (!lane) continue;      /* a terminal arc: on the path, but not a lane */
+    current.marks.onPath.add(lane.edgeId);
+    current.marks.hot.add(lane.edgeId);
+    if (lane.against) current.marks.against.add(lane.edgeId);
+  }
+  /* The solver's own account of which arcs it walked backwards. Read rather
+   * than inferred: `against` above is a fact about the DRAWN lane's direction,
+   * and on a bidirectional lane the two part company -- the solver can take a
+   * cancellation arc along a direction the lane itself allows. Both are true
+   * and they are different sentences, so the beat that is about cancellation
+   * heats the lanes the solver says it cancelled on. */
+  for (const arc of step.used_reverse) {
+    const lane = laneOf(arc.src, arc.dst);
+    if (lane) current.marks.hot.add(lane.edgeId);
+  }
+}
+
+/**
+ * The lane that set this augmentation's bottleneck, named as the room hears it.
+ *
+ * The one thing `lane_residuals` is for: it carries ONE TERM PER ARC OF THE
+ * PATH -- `lane_residuals.length === path.length - 1` -- so the `min(...)` that
+ * produced the bottleneck can be anchored back to the lane it came from. That
+ * alignment is the whole reason the server stopped filtering unbounded terms
+ * out of the list; dropping them used to slide every term one place and made
+ * this question unanswerable.
+ *
+ * Named by its endpoints rather than by its edge id, because "the bottleneck is
+ * A to B" is the sentence, and `e04` is not.
+ */
+function bindingLane(step) {
+  const at = step.lane_residuals.findIndex(
+    (term) => term !== null && term === step.bottleneck,
+  );
+  return at === -1 ? null : `${step.path[at]}→${step.path[at + 1]}`;
+}
+
+/** Switch a beat's layers, by id, over whatever the view's entry table gave. */
+function layers(current, on, off) {
+  for (const id of on) current.layers.add(id);
+  for (const id of off) current.layers.delete(id);
+}
+
+/**
+ * The Flow & Cut spine: beat 0, two beats per augmentation, and the cut.
+ *
+ * **The coarse unit is the augmentation**, which is what the instructor says
+ * out loud -- "iteration 3", never "beat 6". So the textbook set's three
+ * augmentations are three units, and the digit keys mean what the room hears.
+ *
+ * The pristine network and the cut are folded into the first and last units
+ * rather than given units of their own. That is a deliberate cost: pressing
+ * `1` lands on the pristine graph rather than on augmentation 1's path. It buys
+ * the thing that matters more -- a digit key that names the augmentation it
+ * names on the board -- and `1` landing at the start of the story is the
+ * reading of "go back to the beginning" anyone would expect anyway.
+ *
+ * The cut is the LAST BEAT OF THE LAST UNIT and not a view of its own, which is
+ * the whole reason Days 2 and 3 share a screen: the min cut is a certificate of
+ * the flow just computed, and re-rendering it on a fresh screen severs the
+ * argument the certificate is making.
+ */
+export function flowCutSpine(payload, laneOf) {
+  const trace = payload.trace || [];
+  if (!trace.length) return [];
+
+  /* `iteration` 0 is the graph before the first push. Everything after it is an
+   * augmentation, and the augmentations are the units. */
+  const steps = trace.slice(1);
+  const lastUnit = Math.max(steps.length, 1);
+  const beats = [{
+    unit: 1,
+    phase: "pristine",
+    label: "Pristine network",
+    apply: (current) => {
+      showStep(current, trace[0], laneOf);
+      current.throughput = trace[0].total_after;
+      layers(current, ["residual"], ["path", "cut"]);
+    },
+  }];
+
+  steps.forEach((step, index) => {
+    const unit = index + 1;
+    const before = trace[index];        /* step k-1, by construction */
+    const binding = bindingLane(step);
+
+    /* beat a -- the proposal: the path and what it can carry. Residuals are
+     * the ones the path was FOUND in, which is step k-1's; the path and its
+     * bottleneck are step k's. Drawing both from step k would show the path
+     * against the residual graph it had already consumed. */
+    beats.push({
+      unit,
+      phase: "a",
+      label: binding
+        ? `Augmentation ${unit}: bottleneck ${step.bottleneck} at ${binding}`
+        : `Augmentation ${unit}: bottleneck ${step.bottleneck}`,
+      apply: (current) => {
+        showStep(current, before, laneOf);
+        showPath(current, step, laneOf);
+        current.throughput = before.total_after;
+        /* The one A/B pair, and the only place this view claims it: what this
+         * push is about to do to the total. A number the instructor can say
+         * out loud before pressing the key that makes it true. */
+        current.delta = {
+          label: "Flow",
+          before: before.total_after,
+          after: step.total_after,
+        };
+        layers(current, ["residual", "path"], ["cut"]);
+      },
+    });
+
+    /* beat b -- the consequence: the same lanes, updated. The path comes off,
+     * so what is left on screen is exactly what the push changed. */
+    beats.push({
+      unit,
+      phase: "b",
+      label: `Augmentation ${unit}: residual update, total ${step.total_after}`,
+      apply: (current) => {
+        showStep(current, step, laneOf);
+        current.throughput = step.total_after;
+        for (let i = 0; i + 1 < step.path.length; i += 1) {
+          const lane = laneOf(step.path[i], step.path[i + 1]);
+          if (lane) current.marks.hot.add(lane.edgeId);
+        }
+        layers(current, ["residual"], ["path", "cut"]);
+      },
+    });
+  });
+
+  /* The certificate, over the completed flow, on the same screen. */
+  beats.push({
+    unit: lastUnit,
+    phase: "cut",
+    label: `Min cut: capacity ${payload.cut_capacity}`,
+    apply: (current) => {
+      showStep(current, trace[trace.length - 1], laneOf);
+      current.throughput = payload.max_throughput;
+      /* Both off ONE response. Max-flow min-cut says these must be equal, and
+       * two numbers that must be equal, fetched by two routes, are a
+       * contradiction waiting for a projector. */
+      current.cut = payload.cut_capacity;
+      current.sourceSide = new Set(payload.source_side);
+      for (const lane of payload.cut_lanes) {
+        const found = laneOf(lane.src, lane.dst);
+        if (found) {
+          current.marks.inCut.add(found.edgeId);
+          current.marks.hot.add(found.edgeId);
+        }
+      }
+      layers(current, ["cut"], ["residual", "path"]);
+    },
+  });
+
+  return beats;
 }
 
 /**

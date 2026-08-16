@@ -13,6 +13,7 @@
 const ENDPOINTS = {
   datasets: "/datasets",
   scenario: "/scenario",
+  maxflow: "/maxflow",
 };
 
 async function getJSON(path, params) {
@@ -48,4 +49,23 @@ export function fetchDatasets() {
  */
 export function fetchScenario(dataset) {
   return getJSON(ENDPOINTS.scenario, { dataset });
+}
+
+/**
+ * Max throughput, the min-cut certificate and the WHOLE Edmonds-Karp trace, in
+ * one request.
+ *
+ * `trace=true` always, from here, and that is the point of the wrapper: Day 2
+ * steps through the augmentations in both directions at the front of the room,
+ * so anything a keypress can reach is fetched before the first keypress. A
+ * per-beat fetch could not be stepped backwards at speaking pace, and a beat
+ * that awaits anything cannot be synchronous -- which is the property the whole
+ * beat engine is built on.
+ *
+ * One response, not two. Throughput and cut capacity must be equal by max-flow
+ * min-cut, and two numbers that must be equal, fetched separately, are two
+ * numbers that can disagree one slot apart on the instructor's dashboard.
+ */
+export function fetchMaxflow(dataset, threat) {
+  return getJSON(ENDPOINTS.maxflow, { dataset, threat, trace: "true" });
 }

@@ -895,3 +895,222 @@ def test_an_empty_hot_set_means_every_lane_is_hot(assets):
         "state.js never computes coldness, so nothing decides which lanes the "
         "scaffold tier dims"
     )
+
+
+# ---- the Flow & Cut view (issue #42) ----------------------------------------
+# Days 2 and 3 on one screen, because the min cut is a certificate *of the flow
+# just computed* and re-rendering it fresh severs the argument. What is checked
+# here is what a laptop cannot show: the reverse arc's geometry, the promotion
+# rule that keeps two arcs from merging, and the standing ban on solver
+# arithmetic in JavaScript.
+
+# The two offsets the residual marks live at, and the reason there are two.
+# Authored in `render.js` as named constants rather than inline, because the
+# 11/22 relationship is the whole of why promotion must REPLACE rather than add.
+RESIDUAL_OFFSET = 11
+REVERSE_OFFSET = 22
+
+
+def _js_constant(text, name):
+    """A `const NAME = <number>;` declaration's value, or None."""
+    found = re.search(rf"const {name}\s*=\s*(-?[\d.]+)\s*;", text)
+    return float(found.group(1)) if found else None
+
+
+def test_the_two_residual_offsets_are_named_constants(assets):
+    """The offsets are the geometry the promotion rule is derived from.
+
+    Inline, they are two magic numbers eleven apart; named, the relationship
+    between them is legible to whoever next changes one.
+    """
+    render = assets["render.js"]
+    for name, expected in (("RESIDUAL_OFFSET", RESIDUAL_OFFSET),
+                           ("REVERSE_OFFSET", REVERSE_OFFSET)):
+        assert _js_constant(render, name) == expected, (
+            f"render.js declares no `const {name} = {expected};`. The reverse "
+            f"arc is promoted in place at offset {REVERSE_OFFSET} while the "
+            f"plain residual arc sits at {RESIDUAL_OFFSET}."
+        )
+
+
+def test_the_promoted_reverse_arc_spends_no_hue(assets, stylesheet):
+    """Three non-colour channels and no hue, because colour was not available.
+
+    Path-vs-lane is dE 66 normally and 3.1 under achromatopsia, so the reverse
+    arc is distinguished by offset, by its hollow head and by suppressing the
+    plain arc -- never by being a different colour from the residual arc it is
+    a promotion of.
+    """
+    rule = re.search(r"\.reverse-arc\s*\{([^}]*)\}", stylesheet)
+    assert rule, (
+        "style.css paints no `.reverse-arc`. A residual arc traversed against "
+        "its lane is promoted in place, and the promotion needs a rule."
+    )
+    body = rule.group(1)
+    for token in ("--residual", "--residual-w", "--residual-dash"):
+        assert token in body, (
+            f"`.reverse-arc` does not reach for {token}. The promoted arc is "
+            f"the residual arc moved and re-headed -- stroke 4, dash 22 18 -- "
+            f"so it must share the tokens rather than restate the values."
+        )
+    # `--cut`, `--path` and the node roles are the hues that carry meaning.
+    for hue in ("--cut", "--path", "--node-supply", "--node-demand", "--lane-hot"):
+        assert hue not in body, (
+            f"`.reverse-arc` spends {hue}. The mark spends three non-colour "
+            f"channels and no hue; a second hue here is one the room cannot "
+            f"tell from the first under achromatopsia."
+        )
+
+
+def test_the_promoted_arc_has_a_hollow_head_of_its_own(assets, stylesheet):
+    """A hollow head is the glyph channel, and it needs a second marker.
+
+    Reusing `#arrowhead` would leave the promotion carrying two channels where
+    the design spends three, and the head is the one that survives being
+    printed in greyscale.
+    """
+    assert 'id="arrowhead-hollow"' in assets["index.html"], (
+        "index.html defines no `arrowhead-hollow` marker; the promoted reverse "
+        "arc has no hollow head to wear"
+    )
+    assert "arrowhead-hollow" in stylesheet, (
+        "nothing in style.css attaches the hollow head to a mark, so the "
+        "marker is defined and never worn"
+    )
+
+
+def test_promotion_replaces_the_plain_arc_rather_than_adding_to_it(assets):
+    """Two arcs at 11 and 22 sit 4.0 units apart and merge into one thick mark.
+
+    A trap only drawing reveals, and the reason the suppression is a rule
+    rather than a preference: the merged pair reads as a single heavy arc that
+    says neither thing.
+    """
+    code = COMMENT.sub(" ", assets["render.js"])
+    assert "promoted" in code, (
+        "render.js never mentions promotion, so nothing suppresses the plain "
+        "residual arc of a lane whose reverse arc is promoted"
+    )
+
+
+def test_an_offset_chord_is_clipped_by_circle_intersection(assets):
+    """An offset chord's endpoints float clear of the node rim.
+
+    The usual trim walks in along the centre line, which is the wrong line for
+    a mark that is not on it -- the arc ends short of the disc on one side and
+    inside it on the other. Only drawing reveals this, so it is pinned here.
+    """
+    code = COMMENT.sub(" ", assets["render.js"])
+    assert "circleIntersection" in code, (
+        "render.js has no `circleIntersection`. An offset arc trimmed by the "
+        "centre-line rule does not meet the node rim it is drawn between."
+    )
+
+
+def test_the_min_cut_lane_adopts_the_recorded_dash(stylesheet):
+    """`16 24` -- the one subject mark that had no value on record."""
+    assert _dash_patterns(stylesheet)["--cut"] == (16.0, 24.0), (
+        "the min-cut lane's dash is no longer `16 24`, the pattern recorded "
+        "for it when it was the one subject mark with no value on file"
+    )
+
+
+def test_the_cut_is_drawn_as_a_partition_and_not_a_lane_list(assets, stylesheet):
+    """S-side and T-side shading, so the certificate is a partition.
+
+    A list of lane names is a list; the shading is what makes the min cut read
+    as the S-T partition it is defined to be.
+    """
+    for side in ("s-side", "t-side"):
+        assert f".{side}" in stylesheet, (
+            f"style.css paints no `.{side}`; the cut would render as a set of "
+            f"marked lanes with no partition behind it"
+        )
+    # Read in `state.js` rather than in the render pass: which side of the cut
+    # a node is on is app state off the `/maxflow` response, and the render
+    # pass only ever projects state onto classes.
+    code = COMMENT.sub(" ", assets["state.js"])
+    assert "source_side" in code, (
+        "state.js never reads `source_side`, so nothing decides which side of "
+        "the cut a node is on"
+    )
+
+
+def test_the_direction_glyph_is_scoped_to_a_traversal_against_the_lane(stylesheet):
+    """A forward traversal is unmarked, and the glyph is a stylesheet rule.
+
+    One lane, one row, one numeral, one glyph -- so the glyph is `content` on
+    an existing cell rather than a second row, a second column or a per-
+    direction split of the ledger.
+    """
+    rule = re.search(r"#ledger tr\.on-path\.against[^{]*\{([^}]*)\}", stylesheet)
+    assert rule, (
+        "style.css has no `#ledger tr.on-path.against` rule. The direction "
+        "glyph belongs to rows that are BOTH on the path and running against "
+        "the lane; scoped any wider it marks forward traversals too."
+    )
+    assert "content:" in rule.group(1), (
+        "the against-rule paints no `content`; the glyph is drawn by the "
+        "stylesheet so that no second element has to exist for it"
+    )
+
+
+def test_the_beat_timeline_is_populated_and_its_rows_reach_a_beat(assets):
+    """The timeline is a slot the view fills, and clicking a row is a jump.
+
+    A pointer action may only duplicate a keyboard jump, which is exactly what
+    this is: every row is reachable by a digit or by stepping.
+    """
+    page = COMMENT.sub(" ", assets["index.html"])
+    assert 'id="timeline"' in page, "index.html has no timeline slot"
+    assert "setBeat" in page, (
+        "nothing in index.html reaches `setBeat`, so a timeline row click "
+        "cannot land on the beat it names"
+    )
+    assert "buildTimeline" in COMMENT.sub(" ", assets["graph.js"]), (
+        "graph.js does not build the timeline. The render pass never appends "
+        "an element, so the rows have to be emitted by the module that owns "
+        "structure."
+    )
+
+
+# Field names from the /maxflow trace payload. Their presence in the JS is what
+# says the numbers were READ rather than recomputed -- the one rule this view
+# cannot be allowed to break, because a residual the API disagrees with is a
+# number on the projector that contradicts an answer the same tool gave a
+# minute earlier.
+TRACE_FIELDS = ["lane_residuals", "bottleneck", "total_after",
+                "forward_residual", "reverse_residual", "flows", "used_reverse"]
+
+
+def test_every_number_the_view_draws_comes_off_the_trace(assets):
+    code = " ".join(COMMENT.sub(" ", assets[name])
+                    for name in ("state.js", "render.js", "index.html"))
+    for field in TRACE_FIELDS:
+        assert field in code, (
+            f"no module reads `{field}` off the trace. Every number this view "
+            f"draws is server-computed; one that is not is one the API can "
+            f"disagree with, mid-class, with nothing raised anywhere."
+        )
+
+
+def test_no_module_derives_a_residual_or_a_flow_in_javascript(assets):
+    """No solver arithmetic in JavaScript, ever.
+
+    `cap - flow` is the tempting one: it is one line, it is correct on the
+    happy path, and it silently disagrees with the server the moment a threat
+    picture, a removal or a rounding rule moves underneath it. The server ships
+    `flows` and both residual lists precisely so this subtraction never has to
+    be written.
+    """
+    banned = re.compile(r"\b(cap|capacity)\s*-\s*(flow|residual)\b", re.I)
+    for name, text in assets.items():
+        if not name.endswith((".js", ".html")):
+            continue
+        code = COMMENT.sub(" ", text)
+        found = banned.search(code)
+        assert not found, (
+            f"{name}: computes {found.group(0)!r}. Residuals and per-edge "
+            f"flows are computed server-side and shipped; deriving either here "
+            f"is the divergence the trace payload exists to prevent."
+        )

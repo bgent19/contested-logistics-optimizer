@@ -36,6 +36,23 @@
                   markerWidth="5" markerHeight="5" orient="auto-start-reverse">
             <path d="M0,1 L10,5 L0,9 z" fill="context-stroke"/>
           </marker>
+          <!--
+            The promoted reverse arc's head. Hollow rather than filled, which is
+            one of the three non-colour channels the promotion spends: colour
+            was never available to it, since path-vs-lane is dE 66 normally and
+            3.1 under achromatopsia. An outline survives greyscale, a hue does
+            not.
+
+            Its own marker rather than a variant of the one above, because a
+            marker cannot be restyled from the element that wears it --
+            `context-stroke` reaches the stroke, and there is no equivalent that
+            would let one path be filled here and hollow there.
+          -->
+          <marker id="arrowhead-hollow" viewBox="0 0 12 12" refX="10" refY="6"
+                  markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+            <path d="M1,1.5 L11,6 L1,10.5 z" fill="none"
+                  stroke="context-stroke" stroke-width="1.6"/>
+          </marker>
         </defs>
 
         <!--
@@ -79,6 +96,21 @@
       <h2>Layers</h2>
       <div class="controls" id="layer-controls"></div>
 
+      <h2>Beats</h2>
+      <!--
+        The beat timeline. A fixed slot like the rest of the panel, populated by
+        whichever view owns a spine and holding a single row for the views that
+        do not yet -- an empty slot in the place the rows would be is cheaper to
+        read past than a panel that reshapes itself between views.
+
+        The rows are built by graph.js on every spine install rather than once
+        per dataset: a spine's length moves whenever the view, the dataset or
+        the threat picture does. Clicking a row jumps to that beat, which is a
+        pointer action duplicating a keyboard one and reaching nothing the
+        keyboard cannot.
+      -->
+      <ol id="timeline"></ol>
+
       <h2>Lanes</h2>
       <!--
         The lane ledger: one row per stored lane, always, in fixed order, so a
@@ -109,17 +141,31 @@
     through api.js, mutates through state.js, and repaints through render.js.
   -->
   <script type="module">
-    import { fetchDatasets, fetchScenario } from "./api.js";
+    import { fetchDatasets, fetchScenario, fetchMaxflow } from "./api.js";
     import { state, setScenario, setDataset, setView, toggleLayer, pinLane,
-             stepBeat, stepUnit, jumpToUnit, resetView,
-             resolveBeat } from "./state.js";
-    import { buildGraph } from "./graph.js";
+             stepBeat, stepUnit, jumpToUnit, resetView, setBeat, setSpine,
+             flowCutSpine, spine, resolveBeat } from "./state.js";
+    import { buildGraph, buildTimeline, laneForArc } from "./graph.js";
     import { render } from "./render.js";
     import { VIEWS, LAYERS, applyLayerClasses, viewForKey } from "./views.js";
 
     const svg = document.getElementById("theater");
 
+    // The spine whose rows are currently in the timeline. Compared by identity
+    // rather than by length: a spine array is replaced wholesale when one is
+    // installed and when the view switches, and never mutated in place, so
+    // identity is exactly the question "are these the rows on screen?".
+    let drawnSpine = null;
+
     function repaint() {
+      // Rebuilt only when the spine itself changed, so stepping through a beat
+      // is class writes on rows that already exist. Rebuilding every keypress
+      // would work and would throw away the row the pointer is over.
+      const active = spine();
+      if (active !== drawnSpine) {
+        buildTimeline(active);
+        drawnSpine = active;
+      }
       applyLayerClasses(document.documentElement, state.layers);
       render(state);
       // The controls follow the state rather than driving it, so a beat that
@@ -164,6 +210,22 @@
         const row = event.target.closest("tr[data-edge]");
         if (!row) return;
         pinLane(row.dataset.edge);
+        repaint();
+      });
+    }
+
+    /* The timeline's rows, delegated for the same reason the ledger's are: the
+     * rows are rebuilt whenever the spine changes, and a per-row listener would
+     * have to be attached from the build pass.
+     *
+     * A row click is a jump to that beat -- a pointer action that duplicates a
+     * keyboard one exactly. It reaches no state the keyboard cannot, which is
+     * the rule every pointer action on this page lives under. */
+    function bindTimeline() {
+      document.getElementById("timeline").addEventListener("click", (event) => {
+        const row = event.target.closest("li[data-beat]");
+        if (!row) return;
+        setBeat(Number(row.dataset.beat));
         repaint();
       });
     }
@@ -248,6 +310,23 @@
       buildGraph(svg, payload);
       document.getElementById("scenario-name").textContent = payload.name;
       document.getElementById("scenario-description").textContent = payload.description;
+
+      // ANYTHING A KEYPRESS CAN REACH IS FETCHED BEFORE THE FIRST KEYPRESS.
+      // The whole Edmonds-Karp trace arrives as one array on one request, so
+      // stepping -- forwards or backwards, at speaking pace -- is an index
+      // change and never a fetch. A beat that awaited anything could not be
+      // synchronous, and a beat that is not synchronous cannot be stepped back
+      // through while the room watches.
+      //
+      // Awaited before the spine is installed, and the spine is installed
+      // complete or not at all: a half-built ladder is a keyboard that works
+      // for three presses.
+      const maxflow = await fetchMaxflow(datasetId, state.threat);
+      // The lane lookup is handed in rather than imported by state.js, which
+      // keeps the module that owns app state free of the one that owns
+      // elements.
+      setSpine("flow-cut", flowCutSpine(maxflow, laneForArc));
+
       // The beat is re-resolved against the new dataset rather than reset: the
       // marks were cleared with the old theater's edge ids, and the current
       // beat is the only thing that knows what should be marked instead.
@@ -268,6 +347,7 @@
 
       buildControls();
       bindLedger();
+      bindTimeline();
       bindKeys();
       setView(VIEWS[0].id);
 

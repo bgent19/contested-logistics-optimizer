@@ -28,6 +28,11 @@ const NODE_R = 30;
 const TERMINAL_R = 22;
 const LANE_GAP = 6;        /* air between a lane's end and the node it meets */
 
+/* The min cut's territory wash, drawn as a disc behind each node. Wider than
+ * the node so the wash is visible as a ring around it rather than as a fill
+ * the node's own categorical hue is competing with. */
+const SHADE_R = 48;
+
 /* The derived terminals sit outside the authored coordinate range, pinned at
  * the horizontal extremes, so a min cut later reads as the S-T partition it is
  * defined to be.
@@ -111,6 +116,8 @@ export const handles = {
   headline: new Map(),
   /** The A/B pair's three cells, `{root, label, before, after}`. */
   delta: null,
+  /** The beat timeline's rows, in spine order. See `buildTimeline`. */
+  timeline: [],
 };
 
 /** The frozen solves, filled by `buildGraph` and read by `render.js`. */
@@ -119,6 +126,7 @@ export const frozen = {
   anchors: new Map(),      /* edgeId -> {x, y} */
   crossings: [],           /* {point, angle, lanes: [edgeId, edgeId]} */
   directed: new Map(),     /* "src>dst" -> {edgeId, direction} */
+  residualArcs: new Map(), /* "src>dst" -> {edgeId, stored, against} */
   terminalLinks: [],       /* {nodeId, role} for each derived S/T arc */
 };
 
@@ -203,6 +211,65 @@ function directedLookup(edges) {
 /** The lane a directed pair belongs to, and which way along it. */
 export function laneFor(src, dst) {
   return frozen.directed.get(`${src}>${dst}`) || null;
+}
+
+/* The reserved ids the solver gives its derived terminals. Declared here
+ * because this module is what derives the terminals for the canvas; the trace
+ * payload names them, and the path highlight has to recognise them to draw the
+ * synthetic arcs a path actually traverses. */
+export const SUPER_SOURCE = "__source__";
+export const SUPER_SINK = "__sink__";
+
+/* ---- 2b. the residual-arc lookup ------------------------------------------
+ * A second map, because the solver walks arcs the directed lookup above does
+ * not have. Edmonds-Karp gives EVERY lane a residual reverse arc -- that is the
+ * cancellation trick Day 2 is about -- but `directedLookup` only registers a
+ * reversed pair for a lane that is genuinely bidirectional. So `B>A` on a
+ * one-way lane `A->B` is exactly the reverse-arc moment the view exists to
+ * show, and it is exactly the key the other map does not hold.
+ *
+ * Three facts per arc rather than one, and the third is the subtle one:
+ *
+ *   stored   the pair is the lane's authored orientation. Decides which arc
+ *            sets a lane's flow, so a bidirectional lane's two solver arcs
+ *            cannot overwrite each other in payload order.
+ *   against  the traversal runs opposite the lane's OWN direction. False on
+ *            both directions of a bidirectional lane, because both are the
+ *            lane's own -- which is what leaves a legal reverse traversal
+ *            unmarked, where marking it would teach the wrong thing.
+ */
+function residualLookup(edges) {
+  const map = new Map();
+  /* Against-entries first, forward second, so the forward reading wins where a
+   * file stores both `A->B` and `B->A` as separate lanes. Losing that tie the
+   * other way would draw a lane's own direction as a reverse arc. */
+  for (const edge of edges) {
+    if (!edge.bidirectional) {
+      map.set(`${edge.dst}>${edge.src}`,
+              { edgeId: edge.id, stored: false, against: true });
+    }
+  }
+  for (const edge of edges) {
+    map.set(`${edge.src}>${edge.dst}`,
+            { edgeId: edge.id, stored: true, against: false });
+    if (edge.bidirectional) {
+      map.set(`${edge.dst}>${edge.src}`,
+              { edgeId: edge.id, stored: false, against: false });
+    }
+  }
+  return map;
+}
+
+/**
+ * The lane an arc of the trace belongs to, or `null` if it has none.
+ *
+ * `null` is the answer for every arc touching a derived terminal, and it is a
+ * real answer rather than a miss: those arcs are on the path and are drawn, but
+ * they are machinery rather than lanes and have no ledger row, no edge id and
+ * no capacity to report.
+ */
+export function laneForArc(src, dst) {
+  return frozen.residualArcs.get(`${src}>${dst}`) || null;
 }
 
 /* ---- geometry primitives -------------------------------------------------- */
@@ -492,6 +559,7 @@ export function buildGraph(svg, payload) {
   frozen.crossings = crossingSolve(network.edges, positions);
   frozen.anchors = anchorSolve(network.edges, positions, frozen.crossings);
   frozen.directed = directedLookup(network.edges);
+  frozen.residualArcs = residualLookup(network.edges);
   frozen.terminalLinks = terminalLinks(network.nodes);
 
   const xs = [...positions.values()].map((point) => point.x);
@@ -502,9 +570,19 @@ export function buildGraph(svg, payload) {
   frozen.positions = positions;
 
   /* -- lane tier ----------------------------------------------------------- */
+  /* The cut's shading goes down FIRST, under the lanes and under the nodes.
+   * It is territory rather than a mark: a wash painted over a node disc would
+   * argue with the node's own categorical fill, which is the one hue the room
+   * has been reading since the first screen. Underneath, it reads as the side
+   * of the partition the node stands on. */
+  const shades = element("g", { id: "cut-shades" });
+  tiers.lanes.appendChild(shades);
+
   for (const link of frozen.terminalLinks) {
     const line = element("line", { class: "synth" });
     tiers.lanes.appendChild(line);
+    /* The path mark for this arc is emitted with the other marks below, on the
+     * annotation tier, and written back into this bundle there. */
     handles.terminals.set(`${link.role}:${link.nodeId}`, { line, link });
   }
 
@@ -538,7 +616,11 @@ export function buildGraph(svg, payload) {
     const ledgerCells = {};
     for (const column of LEDGER_COLUMNS) {
       const cell = document.createElement("td");
-      cell.className = column.numeric ? "num" : "name";
+      /* The column's own class rides along with the alignment class, so a rule
+       * can reach one column of one row -- which is what lets the direction
+       * glyph be a stylesheet `content` on the flow cell rather than a second
+       * element the render pass would have to keep in step. */
+      cell.className = `${column.numeric ? "num" : "name"} cell-${column.key}`;
       if (column.cell) cell.textContent = column.cell(edge);
       row.appendChild(cell);
       ledgerCells[column.key] = cell;
@@ -566,7 +648,9 @@ export function buildGraph(svg, payload) {
     group.appendChild(circle);
     group.appendChild(text);
     tiers.nodes.appendChild(group);
-    handles.terminals.set(role, { group, circle, text });
+    const shade = element("circle", { class: "cut-shade", r: SHADE_R });
+    shades.appendChild(shade);
+    handles.terminals.set(role, { group, circle, text, shade });
   }
 
   for (const node of network.nodes) {
@@ -580,7 +664,9 @@ export function buildGraph(svg, payload) {
     group.appendChild(id);
     group.appendChild(quantity);
     tiers.nodes.appendChild(group);
-    handles.nodes.set(node.id, { node, group, circle, id, quantity });
+    const shade = element("circle", { class: "cut-shade", r: SHADE_R });
+    shades.appendChild(shade);
+    handles.nodes.set(node.id, { node, group, circle, id, quantity, shade });
   }
 
   /* -- annotation tier ------------------------------------------------------
@@ -598,6 +684,43 @@ export function buildGraph(svg, payload) {
       casings.appendChild(stub);
       handles.edges.get(edgeId).casingStubs.push({ stub, crossing });
     }
+  }
+
+  /* The Flow & Cut marks, in paint order within the tier: the cut lane under
+   * the residual arcs under the path. The path is stroke 11 against the lane's
+   * 4.5, so it covers whatever it crosses -- which is the decision, not an
+   * oversight: at the one beat whose subject is that lane's own commitment, the
+   * path IS the lane.
+   *
+   * Every lane gets all four elements from the first paint, whether or not it
+   * ever carries them. They are `display: none` until a layer switches them on,
+   * and building them per-beat would be an append from the render pass. */
+  for (const edge of network.edges) {
+    const bundle = handles.edges.get(edge.id);
+    const cutMark = element("line", { class: "cut-mark" });
+    /* Two plain residual arcs, one either side of the lane at offset 11: the
+     * arc along the lane's stored direction and the arc counter to it. Two
+     * rather than one because the residual graph genuinely has two arcs per
+     * carrying lane, and Day 2's whole subject is the second one. */
+    const residualAlong = element("line", { class: "residual-arc" });
+    const residualCounter = element("line", { class: "residual-arc" });
+    /* The promotion, at offset 22 with a hollow head. A separate element
+     * rather than a class on the counter arc, because promotion moves the mark
+     * to a different chord -- and because `display` on two elements is how the
+     * replace-never-add rule is enforced in one place. */
+    const reverseArc = element("line", { class: "reverse-arc" });
+    const pathMark = element("line", { class: "path-mark" });
+    for (const part of [cutMark, residualAlong, residualCounter, reverseArc,
+                        pathMark]) {
+      marks.appendChild(part);
+    }
+    bundle.marks = { cutMark, residualAlong, residualCounter, reverseArc, pathMark };
+  }
+
+  for (const link of frozen.terminalLinks) {
+    const bundle = handles.terminals.get(`${link.role}:${link.nodeId}`);
+    bundle.pathMark = element("line", { class: "path-mark" });
+    marks.appendChild(bundle.pathMark);
   }
 
   for (const edge of network.edges) {
@@ -633,5 +756,41 @@ export function buildGraph(svg, payload) {
   return handles;
 }
 
+/**
+ * Emit the beat timeline's rows for one spine.
+ *
+ * The third panel slot, and the one that is not built per dataset: a spine's
+ * length moves whenever the view, the dataset or the threat picture does, so
+ * this runs on every spine install rather than once. It is still a build --
+ * elements in, mutated afterwards by class alone -- and it lives here rather
+ * than in `render.js` for the same reason everything else does: the render pass
+ * never appends.
+ *
+ * The rows are BEATS, not units. The timeline is the printed key to the
+ * keyboard, and the keyboard's finest move is a beat -- a row per unit would
+ * leave half the story with no row naming it.
+ *
+ * Clicking a row is a jump to that beat, which is a pointer action duplicating
+ * a keyboard one and reaching nothing the keyboard cannot. The listener is
+ * delegated by the page; this only writes the index the page reads back.
+ */
+export function buildTimeline(beats) {
+  const list = document.getElementById("timeline");
+  clearChildren(list);
+  handles.timeline = [];
+
+  beats.forEach((beat, index) => {
+    const row = el("li", "beat-row", beat.label || `Beat ${index + 1}`);
+    row.dataset.beat = String(index);
+    /* The coarse unit is what the instructor says out loud, so the row wears
+     * it: the digit keys address units, and a timeline that named only beats
+     * would leave the room unable to see which digit reaches which row. */
+    row.dataset.unit = String(beat.unit);
+    list.appendChild(row);
+    handles.timeline.push(row);
+  });
+  return handles.timeline;
+}
+
 /** Geometry the render pass needs and must not recompute differently. */
-export const geometry = { NODE_R, TERMINAL_R, LANE_GAP };
+export const geometry = { NODE_R, TERMINAL_R, LANE_GAP, SHADE_R };
