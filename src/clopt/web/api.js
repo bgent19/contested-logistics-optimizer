@@ -14,6 +14,7 @@ const ENDPOINTS = {
   datasets: "/datasets",
   scenario: "/scenario",
   maxflow: "/maxflow",
+  interdict: "/interdict",
 };
 
 async function getJSON(path, params) {
@@ -68,4 +69,23 @@ export function fetchScenario(dataset) {
  */
 export function fetchMaxflow(dataset, threat) {
   return getJSON(ENDPOINTS.maxflow, { dataset, threat, trace: "true" });
+}
+
+/**
+ * Day 4's whole budget ladder -- every rung, both tracks -- in one request.
+ *
+ * `ladder=true` always, from here, for the same reason `trace=true` is always
+ * set above: the ladder is walked at the front of the room in both directions,
+ * so it is in hand before the first keypress. The alternative shape of this
+ * call is the 2 x K x datasets requests a per-rung frontend would issue, each
+ * of them a request that can fail while the room watches.
+ *
+ * No `method` parameter, and passing one is a 400 by design: a ladder runs both
+ * methods by definition, so there is nothing for it to select. Where the ladder
+ * ends, whether a rung collapsed and whether its two tracks parted ways are all
+ * decided by the server, which is what keeps them facts a test can pin rather
+ * than logic in a render pass.
+ */
+export function fetchLadder(dataset, threat) {
+  return getJSON(ENDPOINTS.interdict, { dataset, threat, ladder: "true" });
 }

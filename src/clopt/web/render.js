@@ -198,7 +198,7 @@ function slot(id, value) {
 }
 
 /**
- * The headline's six numbers and its one A/B pair.
+ * The headline's numbers and its one A/B pair.
  *
  * The split between the two kinds of number is the point. The struck count and
  * the violation count are *counts of a lane subset*, so they are counted from
@@ -217,6 +217,18 @@ function renderHeadline(state, certificates) {
   slot("cut", state.cut);
   slot("interdicted", certificates.removed);
   slot("violations", certificates.violating);
+  /* Day 4's counts, per track and never per rung: the space's size attached to
+   * a greedy result would claim work greedy never did. */
+  slot("searched", state.search && state.search.searched);
+  slot("skipped", state.search && state.search.skipped);
+  /* The two tracks' residuals as one pair, `140 / 140`. Composed here because
+   * it is a rendering of two numbers rather than a number -- both are read off
+   * the same rung, so the pair cannot be two payloads disagreeing about one k
+   * -- and shown on every dataset including the ones where the two agree.
+   * Agreement absent is a blank half-screen a student reads as "greedy wasn't
+   * run"; agreement stated is the control case. */
+  slot("tracks",
+       state.tracks ? `${state.tracks.greedy} / ${state.tracks.optimum}` : null);
 
   /* The one A/B pair. This ticket owns the slot; the value belongs to whichever
    * view owns the flip, so there is deliberately no fallback pair invented
@@ -432,6 +444,13 @@ export function render(state) {
     const flowText = flow === undefined ? "" : String(flow);
     bundle.ledgerCells.flow.textContent = flowText;
     bundle.canvasLabel.flow.textContent = flowText;
+    /* The plate goes with the numeral rather than with the layer. A beat that
+     * knows no flow for a lane -- Day 4 knows none for any of them, because the
+     * ladder payload carries throughputs rather than per-lane flows -- would
+     * otherwise leave the `flow` layer drawing twelve empty rectangles, which
+     * is the unbacked-numeral bug of the opening screen with the two halves
+     * swapped. */
+    bundle.canvasLabel.plateFlow.classList.toggle("off", flowText === "");
 
     /* -- the anchor's two rows --------------------------------------------- */
     const label = bundle.canvasLabel;

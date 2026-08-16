@@ -85,6 +85,17 @@ const HEADLINE_SLOTS = [
    * would have to resolve out loud. */
   { id: "interdicted", label: "Struck" },
   { id: "violations",  label: "Over cap" },
+  /* Day 4's two search counts, labelled rather than positional. The number
+   * beside a greedy result must not be read as a claim about work greedy did,
+   * and `searched` + `skipped` is the whole space said in the two halves that
+   * are actually true of the track on screen. */
+  { id: "searched",    label: "Searched" },
+  { id: "skipped",     label: "Skipped" },
+  /* The one pair-valued slot: a rung's two residual throughputs, `140 / 140`.
+   * Two columns wide because it carries two numbers and a separator, and a
+   * pair that wrapped or overflowed its cell would shuffle the fixed grid it
+   * exists to sit still in. */
+  { id: "tracks",      label: "Greedy / Opt", wide: true },
 ];
 
 /* The ledger's columns. Widths are percentages and the table is laid out
@@ -471,7 +482,7 @@ function el(tag, className, text) {
 }
 
 /* ---- the headline ---------------------------------------------------------
- * Six fixed stat cells and one A/B pair, built once and thereafter written
+ * The fixed stat cells and one A/B pair, built once and thereafter written
  * only through `textContent`. No `innerHTML` here or anywhere else in the
  * panel: a slot rebuilt from a string loses its handles, and the handle is
  * what makes a row and its lane demonstrably the same object.
@@ -482,7 +493,7 @@ function buildHeadline() {
   handles.headline.clear();
 
   for (const slot of HEADLINE_SLOTS) {
-    const cell = el("div", "stat");
+    const cell = el("div", slot.wide ? "stat wide" : "stat");
     cell.appendChild(el("span", "stat-label", slot.label));
     const value = el("span", "stat-value", "—");
     cell.appendChild(value);
@@ -770,6 +781,12 @@ export function buildTimeline(beats) {
      * it: the digit keys address units, and a timeline that named only beats
      * would leave the room unable to see which digit reaches which row. */
     row.dataset.unit = String(beat.unit);
+    /* Day 4's divergence flag, written from the server's own `diverges` and
+     * carried by both beats of the rung it belongs to. The point of flagging it
+     * on the ROW is that "k=1 agrees, k=2 and k=3 do not" is then visible
+     * without the instructor stepping the whole ladder to find out. Absent on
+     * every other view's spine, where the class simply never appears. */
+    row.classList.toggle("diverges", Boolean(beat.diverges));
     list.appendChild(row);
     handles.timeline.push(row);
   });
