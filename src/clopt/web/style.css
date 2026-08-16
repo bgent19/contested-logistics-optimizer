@@ -21,6 +21,52 @@
  */
 
 :root {
+  /* ---- the stroke model: ONE authored quantity, then derivations --------
+   * The room model: a 2.5 m image on a 1060-unit viewBox at 8 m, so **one
+   * viewBox unit is one arcminute** and stroke widths read as angles with no
+   * conversion.
+   *
+   * `--smear` is the back-row acuity blur, and it is the only number here that
+   * was chosen rather than derived. It is a SAFETY MARGIN, not a measurement --
+   * it corresponds to roughly a 20/204 observer, about ten times a 20/20 eye.
+   * If the real room differs from the model, change this and re-derive; do not
+   * edit the individual patterns, which is how a derived set becomes a set of
+   * magic numbers.
+   *
+   * Two floors apply to every dashed mark, and they are orthogonal:
+   *
+   *   pitch     does it still read as BROKEN? A dashed stroke is a union of
+   *             rectangles and a Gaussian is separable, so the across-stroke
+   *             term cancels out of the modulation ratio identically --
+   *             pitch is *exactly* independent of stroke weight. The floor is
+   *             a closed form in the smear and the duty cycle, with no
+   *             solution above duty ~0.65, which is itself the rule: author at
+   *             duty <= 0.6, because above it survival rests on harmonics and
+   *             harmonics are the first thing a blur removes.
+   *
+   *   presence  is the mark THERE? Effective width is `weight x duty x
+   *             opacity` and must clear 1 MAR (1.97 units) at the 20/40 design
+   *             observer, confirmed with the instructor. The angular floor and
+   *             the ink floor collapse together once a smeared dash is
+   *             recognised as a solid line of its own mean luminance.
+   *
+   * Together with a >=3-cycle requirement on the shortest lane that may carry
+   * a mark (120 units, so pitch <= 40) they give a minimum stroke weight for
+   * any dashed mark of **3.16 units**. `tests/test_web_assets.py` re-derives
+   * all of it from `--smear` rather than restating the numbers.
+   *
+   * The failure mode is the whole argument for checking it from a test: a dash
+   * that loses does not vanish, it becomes a dimmer solid line -- still there,
+   * still the right colour, and saying the wrong thing. */
+  --smear:              6.88;
+
+  /* The scaffold tier, and the ONLY dimming channel on the page. Lanes the
+   * active annotation does not touch drop to this; nothing else may use
+   * opacity as a channel, or two mechanisms compose into a lane at 9% nobody
+   * authored. Safe only because an empty hot set means EVERY lane is hot, so
+   * the graph is never dimmed when it is itself the subject. */
+  --scaffold-op:        .30;
+
   /* ---- ground ---------------------------------------------------------- */
   --bg:                 #07090d;
 
@@ -40,22 +86,86 @@
 
   /* The super-source and super-sink machinery. Dotted rather than dashed --
    * a different register, so derived scaffolding never reads as a real lane
-   * the instructor authored. */
+   * the instructor authored.
+   *
+   * Declared FRONT-OF-ROOM and never load-bearing for the back row. The dash
+   * register is only two-valued at that distance, because duty cycle *is* mean
+   * luminance once a pattern smears: a third value would have to be bought
+   * with stroke weight, taking the machinery to ~7.5 and running weight
+   * opposite to importance. So the machinery is allowed to fade instead, and
+   * `--synth` sits on the presence floor's recorded exemption list.
+   *
+   * derivation: duty 6/28 = 0.21, pitch floor 27.1 at smear 6.88 -> 28 clears;
+   *             presence 3 x 0.21 = 0.64, under 1.97 by design. */
   --synth:              #8d99a8;
   --synth-w:            3;
-  --synth-dash:         2 9;
+  --synth-dash:         6 22;
   --synth-fill:         #22303f;
   --synth-stroke:       #8d99a8;
   --synth-ink:          #ffffff;
 
   /* Removal is a style, not a deletion: a cut lane stays on screen, struck
    * out. Grey rather than red, so it reads as ABSENT rather than as alarming,
-   * and the X is what actually says "gone". */
+   * and the X is what actually says "gone".
+   *
+   * The second mark on the presence floor's exemption list, and for the same
+   * kind of reason: its meaning rides on the glyph, not on the stroke, so a
+   * mark intended to recede failing a presence floor is the criterion agreeing
+   * with the design rather than catching a defect.
+   *
+   * derivation: duty 6/28 = 0.21, pitch floor 27.1 -> 28 clears;
+   *             presence 3 x 0.21 x 0.55 = 0.35, under 1.97 by design. */
   --removed:            #999999;
   --removed-w:          3;
-  --removed-dash:       3 7;
+  --removed-dash:       6 22;
   --removed-op:         .55;
   --removed-glyph-w:    3;
+
+  /* ---- the annotation marks' strokes ------------------------------------
+   * Weight is a channel, and the order is load-bearing: lane 4.5 / residual 4
+   * / min cut 7 / path 11. The residual arc sits just under the lane on
+   * purpose -- taking it to 5 would invert the hierarchy and reproduce the
+   * exact pathology that made the dash register two-valued.
+   *
+   * The residual arc is the thinnest mark this board can carry. It was
+   * authored at 3 for a long time, just under the 3.16 floor, which is why the
+   * pitch work and the presence work landed on the same stroke from opposite
+   * directions.
+   *
+   * These are declared here, ahead of the marks that use them (#42-#44). The
+   * catalog is what the unit teaches from, and a value that appears the day
+   * its mark does is a value nobody has retuned against the room. Unreferenced
+   * tokens warn rather than fail, exactly so this is possible. */
+  --residual:           #56b4e9;
+  --residual-w:         4;
+  /* derivation: duty 22/40 = 0.55, pitch floor 34.4 -> 40 clears at 1.16x;
+   *             presence 4 x 0.55 = 2.20, over 1.97 at 1.12x;
+   *             3.0 cycles on the shortest legal lane. */
+  --residual-dash:      22 18;
+
+  --cut:                #e69f00;
+  --cut-w:              7;
+  /* derivation: duty 16/40 = 0.40, pitch floor 29.5 -> 40 clears at 1.36x;
+   *             presence 7 x 0.40 = 2.80, over 1.97 at 1.42x;
+   *             3.0 cycles on the shortest legal lane. */
+  --cut-dash:           16 24;
+
+  /* Solid, so neither floor applies beyond presence -- which a stroke-11 mark
+   * clears by a factor of five. It is the heaviest mark on the board because
+   * it is the one the room is being asked to trace. */
+  --path:               #f0e442;
+  --path-w:             11;
+
+  /* NOT HERE, and deliberately: the promoted reverse arc's adopted `24 15` at
+   * stroke 11. Its duty is 0.615, over the 0.6 authoring cap, and it clears the
+   * pitch floor by 1.008x -- inside the closed form's own ~1% error bar, which
+   * is to say it is a value the rule cannot actually certify. It is also
+   * geometry-specific in a way nothing else here is: it exists only for an arc
+   * promoted to offset 22 with a hollow head and its lane's plain residual
+   * suppressed, all of which lands with Flow & Cut. Shipping the token now
+   * would put a pattern in the catalog that fails this ticket's own duty rule,
+   * with no mark on screen to justify the exception. Recorded here so the
+   * ticket that draws it re-opens the question rather than rediscovering it. */
 
   /* ---- annotation tier ------------------------------------------------- */
   /* The knockout casing at a lane crossing. Painted in the background colour
@@ -383,7 +493,8 @@ html, body {
   display: none;
 }
 
-.lane-group.removed .removed-glyph { display: inline; }
+/* Whether the X shows is the `removed` layer's business; see the catalog
+ * below. The glyph is display:none by default and nothing else reveals it. */
 
 .synth {
   stroke: var(--synth);
@@ -460,25 +571,131 @@ html, body {
   display: none;
 }
 
-/* Layer visibility is a root class, set by `views.js`. Every rule that turns a
- * mark on lives here, so a view is a set of class names rather than a set of
- * style writes. */
-.show-lanelabels .lane-label { display: inline; }
-.show-flow .anchor-label     { display: inline; }
+/* ---- the annotation marks, ahead of the elements that carry them ----------
+ * Appearance for the three marks whose strokes the stroke model has already
+ * settled. The view tickets emit the elements; nothing about how they look is
+ * left for them to invent, which is the whole point of the token block --
+ * otherwise the retune against the real projector has to chase three more
+ * files. Each is `display: none` here and revealed by its layer class.
+ *
+ * Redundant encoding is mandatory rather than nice, and these are where it is
+ * spent: the catalog needs about eleven simultaneous categorical roles and the
+ * standard colour-blind-safe palette has eight, so hues run out IN PRINCIPLE.
+ * Dash register goes first, then weight, then glyphs. */
+.residual-arc {
+  stroke: var(--residual);
+  stroke-width: var(--residual-w);
+  stroke-dasharray: var(--residual-dash);
+  fill: none;
+  display: none;
+}
 
-/* The plate and the casing follow the marks they back, not one named layer.
- * Either annotation layer puts text on the annotation tier over the lanes, and
- * text over a lane needs its plate under it and its crossings broken -- so
- * both appear whenever either does. Listing only `.show-flow` here is what put
- * unbacked numerals on the opening screen once already. */
-.show-lanelabels .anchor-plate,
-.show-flow .anchor-plate { display: inline; }
+.cut-mark {
+  stroke: var(--cut);
+  stroke-width: var(--cut-w);
+  stroke-dasharray: var(--cut-dash);
+  fill: none;
+  display: none;
+}
 
-/* The casing is bought exactly when a route is being traced over the lanes,
+/* Solid and the heaviest stroke on the board, because it is the mark the room
+ * is being asked to trace. Every on-lane treatment leaves none of the lane
+ * visible underneath it -- which is a decision, not an oversight: at the one
+ * beat whose subject is that lane's own commitment, the path IS the lane. */
+.path-mark {
+  stroke: var(--path);
+  stroke-width: var(--path-w);
+  stroke-linecap: round;
+  fill: none;
+  display: none;
+}
+
+.cut-shade, .route-mark, .naive-mark, .violation { display: none; }
+
+/* ---- the scaffold tier ----------------------------------------------------
+ * Lanes the active annotation does not touch dim to 30%, so the room's eye goes
+ * to the lanes the instructor is currently talking about. This tier OWNS
+ * opacity: nothing else on the page may use dimming as a channel, or two
+ * mechanisms compose into a lane at 9% that nobody authored.
+ *
+ * Safe only because of the rule in `state.js` that an empty hot set means EVERY
+ * lane is hot -- so the pristine network, the one picture whose subject is the
+ * graph itself, is never dimmed. `render.js` writes `cold` onto the lane and
+ * its marks together from one call, so a lane and its numerals can never end up
+ * on opposite sides of the tier. */
+.lane-group.cold,
+.lane-marks.cold { opacity: var(--scaffold-op); }
+
+/* Cap/cost/risk labels appear only on hot lanes. This is not a special case --
+ * it falls out of the scaffold rule: a cold lane is not the subject, and its
+ * numerals are the densest thing on the canvas. The flow numeral is deliberately
+ * NOT suppressed here; it dims with its lane, because "this lane carries 0" is
+ * part of reading a flow even where the flow is not the subject. */
+.lane-marks.cold .lane-label { display: none; }
+
+/* ---- the layer catalog ----------------------------------------------------
+ * ONE GLOBAL CATALOG. A view is a named default toggle-state, not an owner --
+ * view-scoped layers were rejected because the unit's strongest moments are
+ * cross-day mashups, and showing Day 3's cut on top of Day 4's interdicted
+ * network is Day 4's entire punchline. Layer visibility is a root class set by
+ * `views.js`, so a view is a set of class names rather than a set of style
+ * writes, and beats override layer state by changing the same set.
+ *
+ * Every layer has a rule here from the day the catalog lands, including the
+ * ones whose marks arrive with #42-#44 -- the same reason `views.js` lists them
+ * ahead of their marks. A layer that appears the day its marks do is a toggle
+ * nobody has pressed before the class it matters in.
+ *
+ * ALL-LAYERS-ON IS NOT A LEGAL PRESET: it is illegible in every colour scheme,
+ * so no view may declare the whole catalog, and there is no control that
+ * switches everything on. `tests/test_web_assets.py` asserts it. */
+
+/* base topology's derived machinery -- on in all three views, but still a
+ * toggle, because the S/T partition is worth being able to take away while
+ * talking about the authored network alone. */
+.synth, .terminal { display: none; }
+.show-synth .synth,
+.show-synth .terminal { display: inline; }
+
+/* the two halves of the old single lane label. Split because Flow & Cut wants
+ * capacities beside a flow and Cost & Risk wants cost and risk instead --
+ * one text carrying all three put two of them on screen unasked in both. They
+ * share the anchor's second row and are never both on by default. */
+.show-caps .lane-caps         { display: inline; }
+.show-costrisk .lane-costrisk { display: inline; }
+.show-flow .anchor-label      { display: inline; }
+
+/* The plate follows the text it backs rather than one named layer: text over a
+ * lane needs its plate under it whichever layer put it there. Listing only
+ * `.show-flow` here is what put unbacked numerals on the opening screen once
+ * already. */
+.show-flow .plate-flow { display: inline; }
+.show-caps .plate-stat,
+.show-costrisk .plate-stat { display: inline; }
+
+/* The casing is bought exactly when something is being drawn over the lanes,
  * and not before: on the pristine screen there is nothing above the lane tier,
  * so there is nothing to break and the crossings stay unmarked. */
-.show-lanelabels .casing,
-.show-flow .casing { display: inline; }
+.show-flow .casing,
+.show-caps .casing,
+.show-costrisk .casing { display: inline; }
+
+/* The blockade's X. The layer gates the ANNOTATION, not the lane's own stroke:
+ * a lane whose capacity the server has zeroed is drawn struck out whatever the
+ * catalog says, because the stroke is a fact about the network and must never
+ * claim a capacity the panel disagrees with. What the layer controls is whether
+ * the room's attention is drawn to it. */
+.show-removed .lane-group.removed .removed-glyph { display: inline; }
+
+/* Marks landing with the view tickets. Their strokes are already tokenised and
+ * derived above; these are the rules that will switch them on. */
+.show-residual .residual-arc { display: inline; }
+.show-path .path-mark        { display: inline; }
+.show-cut .cut-mark,
+.show-cut .cut-shade         { display: inline; }
+.show-route .route-mark      { display: inline; }
+.show-naive .naive-mark,
+.show-naive .violation       { display: inline; }
 
 /* Arrowheads are appearance, so they are attached here rather than written
  * onto each line from JavaScript. */

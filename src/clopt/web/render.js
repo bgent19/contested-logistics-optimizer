@@ -51,6 +51,28 @@ const PLATE_HEIGHT = 24;
 const CENTRE_BASELINE = 6;     /* drop a centred line to optical middle */
 const LABEL_GAP = 12;          /* air between a node's disc and its id */
 
+/* The anchor's two rows, straddling the frozen point rather than starting at
+ * it: the flow numeral sits half a row above and the lane's statistics half a
+ * row below, so the PAIR is centred on the point the anchor solve certified
+ * clear. Hanging both rows downward would put the lower one somewhere the solve
+ * never checked.
+ *
+ * The one geometry consequence of splitting the lane label in two, and worth
+ * naming because it is a footprint change made outside the ticket that measured
+ * the clearances. Two rows are not optional -- Flow & Cut shows a capacity AND
+ * a flow, so the catalog requires both on screen at once, and the single-row
+ * layout that preceded this drew them on top of each other. The label block now
+ * spans the anchor +/-25 where it spanned +/-12, and 13 is near the minimum
+ * that keeps two 24-unit plates apart.
+ *
+ * That still clears every distance the anchor solve enforces -- 74 from a node
+ * (44 of it air beyond the disc), 74 from another anchor, 44 from a crossing.
+ * What it does exceed is the 14-unit lane half-band, which governs the casing
+ * width rather than the label, so nothing the crossing solve depends on moves.
+ * If the retune against the real projector shows a plate crowding a lane it is
+ * not attached to, this constant is the one to pull, not the anchor solve. */
+const ROW_OFFSET = 13;
+
 /**
  * Shorten a segment so it starts and ends clear of the discs it joins.
  *
@@ -74,6 +96,29 @@ function place(line, segment) {
   line.setAttribute("y1", segment.y1);
   line.setAttribute("x2", segment.x2);
   line.setAttribute("y2", segment.y2);
+}
+
+/**
+ * Place one row of an anchor's stacked text, and the plate behind it.
+ *
+ * `text` is what the plate is sized against, which is not always the row's own
+ * content -- two texts sharing a row share a plate, and it has to fit the wider
+ * of them whichever is switched on. Pass `null` for the plate on the second
+ * text of a shared row.
+ */
+function row(node, plate, anchor, offset, text) {
+  node.setAttribute("x", anchor.x);
+  node.setAttribute("y", anchor.y + offset);
+  if (!plate) return;
+  /* The plate is sized from the text it backs, which is geometry; its fill and
+   * opacity are the stylesheet's business. Deliberately NOT measured with
+   * `getBBox()`: the plate is `display: none` until its layer is switched on,
+   * and a hidden element measures as zero. */
+  const width = Math.max(text.length, PLATE_MIN_CHARS) * CHAR_ADVANCE;
+  plate.setAttribute("x", anchor.x - width / 2);
+  plate.setAttribute("y", anchor.y + offset - PLATE_HALF_HEIGHT);
+  plate.setAttribute("width", width);
+  plate.setAttribute("height", PLATE_HEIGHT);
 }
 
 /** Write one headline slot, showing the em dash rather than a gap when the
@@ -186,8 +231,16 @@ export function render(state) {
     }
     /* The canvas lane carries the emphasis states too, so a pinned row and its
      * lane light up together -- the click has to be visible in the room, not
-     * only on the instructor's display. */
+     * only on the instructor's display.
+     *
+     * `cold` is the scaffold tier, written onto the lane and its numerals from
+     * this one call so the two can never end up on opposite sides of it. Note
+     * that hot and cold are not complements: with an empty hot set neither
+     * class is written anywhere, which is the pristine screen -- the graph is
+     * never dimmed when the graph is itself the subject. */
     bundle.group.classList.toggle("hot", states.hot);
+    bundle.group.classList.toggle("cold", states.cold);
+    bundle.canvasLabel.group.classList.toggle("cold", states.cold);
 
     const removed = states.removed;
     bundle.group.classList.toggle("removed", removed);
@@ -227,25 +280,30 @@ export function render(state) {
     bundle.ledgerCells.cap.textContent = String(cap);
     bundle.ledgerCells.risk.textContent = risk.toFixed(2);
 
-    /* -- the anchor's text ------------------------------------------------- */
-    const { plate, stats, flow } = bundle.canvasLabel;
+    /* -- the anchor's two rows --------------------------------------------- */
+    const label = bundle.canvasLabel;
 
-    stats.setAttribute("x", anchor.x);
-    stats.setAttribute("y", anchor.y);
     /* Capacity, cost and risk, from the payload or from the server's `changes`
-     * block -- never arithmetic performed here. */
-    stats.textContent = `${cap}/${bundle.edge.cost}/${risk.toFixed(2)}`;
+     * block -- never arithmetic performed here. Two texts on the lower row,
+     * one per layer, so the catalog can show a capacity beside a flow without
+     * also putting cost and risk on the board. Both are written every pass
+     * whichever is visible: a text that is only updated while its layer is on
+     * is a text that shows a stale number the moment the layer comes back. */
+    label.caps.textContent = String(cap);
+    label.costrisk.textContent = `${bundle.edge.cost}/${risk.toFixed(2)}`;
 
-    flow.setAttribute("x", anchor.x);
-    flow.setAttribute("y", anchor.y);
+    /* The lower row's plate is sized to whichever of its two texts is longer,
+     * rather than to the one currently showing. Sizing it to the visible one
+     * would make the plate's width depend on the layer set -- a geometry write
+     * driven by appearance state, and a plate that changes size when a layer is
+     * toggled on a beat that changed nothing else. */
+    const statText = label.caps.textContent.length >= label.costrisk.textContent.length
+      ? label.caps.textContent
+      : label.costrisk.textContent;
 
-    /* The plate is sized from the text it backs, which is geometry; its fill
-     * and opacity are the stylesheet's business. */
-    const width = Math.max(stats.textContent.length, PLATE_MIN_CHARS) * CHAR_ADVANCE;
-    plate.setAttribute("x", anchor.x - width / 2);
-    plate.setAttribute("y", anchor.y - PLATE_HALF_HEIGHT);
-    plate.setAttribute("width", width);
-    plate.setAttribute("height", PLATE_HEIGHT);
+    row(label.flow, label.plateFlow, anchor, -ROW_OFFSET, label.flow.textContent);
+    row(label.caps, label.plateStat, anchor, ROW_OFFSET, statText);
+    row(label.costrisk, null, anchor, ROW_OFFSET, statText);
   }
 
   renderHeadline(state, certificates);
