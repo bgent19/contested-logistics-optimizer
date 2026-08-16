@@ -21,12 +21,21 @@
 
 import { frozen, geometry, handles, SUPER_SINK, SUPER_SOURCE } from "./graph.js";
 import { edgeChanges, isRemoved, laneStates, nodeStates, NODE_STATES,
-         ROW_STATES } from "./state.js";
+         ROW_STATES, severedNodes } from "./state.js";
 
 /** The em dash an empty headline slot shows. A slot is never blank: a gap
  *  reads as a number that failed to arrive, where "—" reads as "not on this
  *  view", which is what it means. */
 const EMPTY = "—";
+
+/* What `T` says on a dataset that declares no threat picture.
+ *
+ * A LABELLED no-op: two of the three shipped datasets have nothing for this key
+ * to cycle, so a silent decline is the common case rather than an edge, and a
+ * key that does nothing in silence is indistinguishable from one that is
+ * broken. It sits in the threat caption's own slot because that is the slot
+ * whose subject is exactly this question. */
+const NO_PICTURES = "no threat pictures in this dataset";
 
 const GLYPH = 13;   /* half-diagonal of a lane's struck-out X, in diagram units */
 
@@ -207,6 +216,35 @@ function slot(id, value) {
     value === null || value === undefined ? EMPTY : String(value);
 }
 
+/** Write a slot's second line, or clear it. An empty qualifier collapses --
+ *  unlike the number above it, an absent one has nothing to hold a place for. */
+function qualify(id, text) {
+  handles.qualifiers.get(id).textContent = text;
+}
+
+/**
+ * The active threat picture's caption: what it is called, and what the
+ * instructor wrote about it.
+ *
+ * The `note` on each disruption is authored narration that nothing in this repo
+ * has ever drawn -- "Forward port struck; its 60 units of stock are lost to the
+ * plan" -- and on a projector it is the sentence the room reads while the
+ * numbers move underneath. Read off `disruptions`, which is the declaration, and
+ * not off `changes`, which is the computed result and carries no words at all.
+ *
+ * Every note of the picture, joined: a picture is a set of disruptions and each
+ * one was given its own sentence, so showing the first would silently drop the
+ * author's account of the second lane that went.
+ */
+function threatCaption(state) {
+  if (state.threatNoOp) return NO_PICTURES;
+  if (!state.threat) return "";
+  const picture = state.scenario.threat_pictures[state.threat];
+  if (!picture) return "";
+  const notes = picture.disruptions.map((one) => one.note).filter(Boolean);
+  return `${state.threat} — ${notes.join(" ")}`;
+}
+
 /**
  * The headline's numbers and its one A/B pair.
  *
@@ -220,7 +258,16 @@ function slot(id, value) {
  */
 function renderHeadline(state, certificates) {
   const scenario = state.scenario;
+  /* The server's figure, unadjusted, under every threat picture. What a picture
+   * moves is on the wire in `changes`; total supply is not in it, because
+   * removing a node zeroes its lanes and leaves its stock exactly where it was.
+   * Subtracting the severed hubs here would be the frontend inventing a number
+   * the API does not have -- so the total stands and the line under it says how
+   * many hubs are no longer able to send any of it anywhere. */
   slot("supply", scenario.total_supply);
+  qualify("supply", certificates.severed
+    ? `${certificates.severed} hub(s) severed`
+    : "");
   slot("demand", scenario.total_demand);
   slot("throughput", state.throughput);
   slot("bottleneck", state.bottleneck);
@@ -268,6 +315,11 @@ function renderHeadline(state, certificates) {
    * above: a stat's absence means "not on this view" and is worth a place-
    * holder, where a sentence's absence means there is nothing to say. */
   handles.note.textContent = state.note || "";
+
+  /* The picture's own caption, in its own slot. Written every pass whichever
+   * state it is in, so a `T` back to baseline clears the theater's narration
+   * rather than leaving a sentence about mined straits over a pristine graph. */
+  handles.threat.textContent = threatCaption(state);
 }
 
 /** Repaint everything from the current state. Idempotent, and cheap enough to
@@ -323,7 +375,7 @@ export function render(state) {
   /* The certificates the headline's numbers are read off. Accumulated inside
    * the lane loop rather than computed beside it, so the count and the marked
    * rows cannot come apart. */
-  const certificates = { removed: 0, violating: 0, overdrawn: 0 };
+  const certificates = { removed: 0, violating: 0, overdrawn: 0, severed: 0 };
 
   for (const [edgeId, bundle] of handles.edges) {
     const a = positions.get(bundle.edge.src);
@@ -518,6 +570,11 @@ export function render(state) {
   }
 
   /* -- nodes --------------------------------------------------------------- */
+  /* The hubs this picture has cut off, read out of the same `changes` block the
+   * lanes above were struck from -- built once for the whole pass, so every
+   * node is judged against the same map exactly as every lane was. */
+  const severed = severedNodes(state, changes);
+
   for (const [nodeId, bundle] of handles.nodes) {
     const point = positions.get(nodeId);
     bundle.circle.setAttribute("cx", point.x);
@@ -535,6 +592,21 @@ export function render(state) {
      * have to disagree with itself. */
     const flags = nodeStates(state, nodeId);
     if (flags.overdrawn) certificates.overdrawn += 1;
+
+    /* Severance is not one of `NODE_STATES` and must not become one. Those
+     * three are Day 1's plan failures -- facts about an ALLOCATION, cleared and
+     * rebuilt on every beat -- where this is a fact about the network under the
+     * active picture, true on every beat of all three views until `T` is
+     * pressed again. Filed with them, it would be wiped by the next `resolveBeat`
+     * and a severed hub would flicker back to healthy on the next keypress.
+     *
+     * Counted here, from the very set that classes the node, so the figure
+     * under `Supply` and the struck hubs certifying it are one rendering.
+     * Supply nodes only: the count sits under the supply figure and is a claim
+     * about it, and a severed transit node has no stock to strand. */
+    const isSevered = severed.has(nodeId);
+    bundle.group.classList.toggle("severed", isSevered);
+    if (isSevered && bundle.node.kind === "supply") certificates.severed += 1;
     for (const name of NODE_STATES) {
       bundle.group.classList.toggle(name, flags[name]);
     }

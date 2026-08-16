@@ -19,6 +19,17 @@ import { layersForView, VIEWS } from "./views.js";
 export const state = {
   /** Dataset id currently drawn; `null` until the first load. */
   dataset: null,
+
+  /**
+   * Every dataset id, in the server's own cycle order.
+   *
+   * `/datasets` answers default-first then alphabetical, and that order is the
+   * cycle: **`D` opens on the default and moves away from it**, so at two
+   * datasets pressing it twice brings the instructor home. Sorting here would
+   * be a second opinion about an order the server already holds.
+   */
+  datasets: [],
+
   /** The `/scenario` payload, verbatim. */
   scenario: null,
   /** Active view id. */
@@ -46,6 +57,38 @@ export const state = {
   layerOverrides: new Map(),
   /** Active threat picture name, or `null` for the pristine network. */
   threat: null,
+
+  /**
+   * The threat picture each dataset was last left on, `{datasetId: name|null}`.
+   *
+   * **The threat picture is per-dataset state**, which is what makes the Day 2
+   * excursion survivable: park on `strait_mined`, press `D` to show the same
+   * beat on the textbook network, press `D` back, and the theater is still
+   * under the picture it was left under. A single global field would either
+   * carry a name into a dataset that never declared it -- every lookup coming
+   * back undefined, a pristine network the panel claims is under threat -- or
+   * drop the picture permanently on the way out.
+   *
+   * A picture name is only meaningful within one dataset, exactly like an edge
+   * id, so `restoreThreat` checks the remembered name against the target's own
+   * list rather than trusting it.
+   */
+  threatByDataset: new Map(),
+
+  /**
+   * Whether the last `T` had nothing to cycle. TRANSIENT.
+   *
+   * `T` on a dataset with no threat pictures is a *labelled* no-op, because a
+   * key that silently does nothing is a key that looks broken -- and two of the
+   * three shipped datasets declare no picture at all, so this is the common
+   * case rather than a defensive branch.
+   *
+   * Cleared by `resolveBeat` with everything else derived, which is the right
+   * lifetime: the label belongs to the keypress that produced it, and one still
+   * on screen three beats later would be claiming something about the beat
+   * under it instead.
+   */
+  threatNoOp: false,
 
   /**
    * Index into the active view's spine. See the beat engine below.
@@ -441,6 +484,11 @@ export function resolveBeat() {
   state.dispatch.clear();
   state.detent = null;
   state.note = null;
+  /* `T`'s labelled no-op belongs to the keypress that produced it. Left
+   * standing, it would sit under a later beat saying something about that beat
+   * instead -- the same failure the idempotence rule exists to make impossible,
+   * one slot further down the panel. */
+  state.threatNoOp = false;
   state.throughput = null;
   state.cut = null;
   state.tracks = null;
@@ -545,6 +593,14 @@ export function jumpToUnit(number) {
  */
 export function resetView() {
   state.threat = null;
+  /* The remembered picture goes with the live one, or `R` would not be the full
+   * reset it advertises: the threat would come back on the next round trip
+   * through `D`, from a stash the instructor has no control over.
+   *
+   * Note that the caller must re-apply the threat after this -- the spines on
+   * screen were built from the old picture's payloads, and clearing the field
+   * alone would leave the panel captioned pristine over a disrupted ladder. */
+  state.threatByDataset.delete(state.dataset);
   state.beat = 0;
   state.layerOverrides.clear();
   resolveBeat();
@@ -599,6 +655,121 @@ export function toggleLayer(layerId) {
 /** Switch threat picture. `null` restores the pristine network. */
 export function setThreat(name) {
   state.threat = name;
+}
+
+/* ---- the two cycling axes (issue #45) -------------------------------------
+ *
+ * `D` and `T` move the dataset and the threat picture WITHOUT leaving the beat
+ * the instructor is on, which is the whole of what they are for: park on a
+ * detent, cycle the picture, and watch the same plan buckle -- or hold the same
+ * step and change network. Neither of them may touch `state.beat`.
+ *
+ * Carrying the index across is a CLAMP and it is `setSpine`'s, not a second one
+ * here. Every ladder in this application is derived from data, so a spine's
+ * length moves under the instructor whenever either of these keys is pressed;
+ * clamping on install is what keeps the render pure across that move, and an
+ * assignment in either function below would restart the story on the key whose
+ * entire purpose is not to.
+ */
+
+/** Every dataset id, in the order `/datasets` gave them. */
+export function setDatasets(ids) {
+  state.datasets = ids;
+}
+
+/** The names of the pictures this dataset declares, in payload order. */
+export function threatNames(current = state) {
+  return current.scenario ? Object.keys(current.scenario.threat_pictures) : [];
+}
+
+/**
+ * The dataset `D` moves to, or `null` when there is nowhere to go.
+ *
+ * Wraps, unlike the beat ladder: the ends of a story must not join up, but a
+ * set of theaters has no ends -- it is a ring the instructor walks round, and
+ * "press it twice at two datasets and you are home" is the property that makes
+ * the excursion cheap enough to take mid-sentence.
+ */
+export function nextDataset(current = state) {
+  const at = current.datasets.indexOf(current.dataset);
+  if (at === -1 || current.datasets.length < 2) return null;
+  return current.datasets[(at + 1) % current.datasets.length];
+}
+
+/** Remember this dataset's threat picture before `D` leaves it. */
+export function stashThreat() {
+  if (state.dataset !== null) {
+    state.threatByDataset.set(state.dataset, state.threat);
+  }
+}
+
+/**
+ * Take up the picture this dataset was last left on, if it still declares one.
+ *
+ * Called once the new `/scenario` payload is in hand and BEFORE anything is
+ * fetched with it, because the threat is a parameter of all four solver
+ * requests: restored afterwards, the spines on screen would be the pristine
+ * network's under a panel captioned with a threat picture.
+ */
+export function restoreThreat() {
+  const remembered = state.threatByDataset.get(state.dataset);
+  state.threat = threatNames().includes(remembered) ? remembered : null;
+}
+
+/**
+ * `T`: baseline -> each declared picture -> baseline. Returns whether it moved.
+ *
+ * It comes home to `null` rather than cycling the pictures alone, because the
+ * pristine network is where the comparison is made FROM -- a cycle with no way
+ * back would strand the instructor inside the theater.
+ *
+ * Declining is recorded rather than silent. See `threatNoOp`.
+ */
+export function cycleThreat() {
+  const names = threatNames();
+  state.threatNoOp = names.length === 0;
+  if (state.threatNoOp) return false;
+  /* `indexOf` answers -1 on the pristine network, which is exactly the position
+   * before the first picture -- so baseline is the zeroth stop of the cycle
+   * rather than a case tested for separately. */
+  const at = names.indexOf(state.threat);
+  state.threat = at + 1 < names.length ? names[at + 1] : null;
+  return true;
+}
+
+/**
+ * The nodes this threat picture has cut off entirely, as node ids.
+ *
+ * READ out of the server's `changes` block like everything else about a
+ * disruption: a node is severed when every stored lane touching it has been
+ * removed. That is one question asked through `isRemoved`, so a severed hub and
+ * a struck lane cannot answer it differently -- and it catches a hub isolated
+ * by removing its lanes one at a time just as it catches `remove_node`, which
+ * reading the declarations would not.
+ *
+ * This exists because **removing a node leaves its quantity intact**. The hub
+ * still reports its stock and the network still reports full total supply, so a
+ * panel with nothing to say about it would sit there reading unchanged beside a
+ * visibly severed hub -- inviting exactly the wrong question at the moment the
+ * instructor is making the opposite point. The answer is a mark and a count in
+ * the panel, never a mutated total: the figure is the server's.
+ */
+export function severedNodes(current, changes) {
+  const severed = new Set();
+  if (!current.scenario || !changes.size) return severed;
+  const incident = new Map();
+  for (const edge of current.scenario.network.edges) {
+    for (const nodeId of [edge.src, edge.dst]) {
+      if (!incident.has(nodeId)) incident.set(nodeId, []);
+      incident.get(nodeId).push(edge.id);
+    }
+  }
+  /* A node with no lanes at all never enters the map, which is right: it was
+   * already isolated in the pristine network, and nothing was taken from it. */
+  for (const [nodeId, lanes] of incident) {
+    if (lanes.every((edgeId) => isRemoved(changes, edgeId))) severed.add(nodeId);
+  }
+  return severed;
 }
 
 /**
