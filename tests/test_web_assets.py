@@ -1345,3 +1345,426 @@ def test_the_min_cut_is_on_screen_from_beat_zero(assets):
         "`showCut` is declared and called once; both spines that show a cut "
         "must go through it"
     )
+
+
+# ---- the Cost & Risk view (issue #44) ---------------------------------------
+# Day 1, and the lambda sequel folded into it. What is checked here is what a
+# laptop cannot show: that the coarse unit is a distinct Pareto POINT rather
+# than a lambda value, that the two failures of the naive plan stay two
+# structurally different things, and that the degenerate view x dataset
+# combination is labelled rather than struck.
+
+# The three node states this view introduces, and the only list of them in this
+# file. Restated here rather than imported out of `state.js` for the same reason
+# `ROW_STATES` is: a test that read the list under review could not catch it
+# losing a member.
+NODE_STATES = ["overdrawn", "unreachable", "illegal"]
+
+# The sentence the degenerate combination puts in the headline. Asserted
+# verbatim because it is what the room reads instead of a punchline, and an
+# implementer who reworded it to something vaguer would be quietly turning a
+# labelled combination back into a mute one.
+DEGENERATE_NOTE = "no risk data; frontier is a single point"
+
+
+def test_both_arrays_are_prefetched_before_the_first_keypress(assets):
+    """/sweep and /naive, in hand before the dial can be turned.
+
+    The dial never awaits a fetch. Both arrays are the same length and in the
+    same lambda order by the API's own contract, so the A/B flip is a swap at
+    one index -- and a flip that awaited anything could not be stepped
+    backwards at speaking pace.
+    """
+    api = COMMENT.sub(" ", assets["api.js"])
+    for fetcher in ("fetchSweep", "fetchNaive"):
+        assert f"export function {fetcher}" in api, (
+            f"api.js exports no `{fetcher}`. Every fetch and every endpoint "
+            f"path belongs to api.js, and Day 1 needs both arrays."
+        )
+
+    page = COMMENT.sub(" ", assets["index.html"])
+    for fetcher in ("fetchSweep", "fetchNaive"):
+        assert fetcher in page, f"index.html never calls {fetcher}"
+        assert page.index(fetcher) < page.index("bindKeys()"), (
+            f"{fetcher} is called after the keyboard goes live, so the first "
+            f"press could land on a spine that is not yet installed"
+        )
+    assert re.search(r'setSpine\(\s*"cost-risk"', page), (
+        "nothing installs a spine under the `cost-risk` view id, so Day 1 "
+        "falls back to the one-beat entry spine and every key is a no-op"
+    )
+
+
+def test_the_coarse_unit_is_a_pareto_point_and_dedup_is_on_the_pair(assets):
+    """Four detents, not eight lambdas -- and a block collapses only if NEITHER
+    side moved.
+
+    Walking lambda positions would make the first four presses of Day 1 change
+    nothing on screen, which is the exact dead-key failure the beat model
+    exists to prevent, sitting in the default sweep at the worst possible
+    moment. Dedup on the optimum alone would be the same bug one step later: on
+    the theater the naive plan moves at a lambda where the optimum does not.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    assert "export function paretoRows" in state, (
+        "state.js exports no `paretoRows`. The dedup has exactly one "
+        "implementation, because the panel's rows and the spine's detents are "
+        "the same decision -- computed twice, they can disagree."
+    )
+    block = re.search(r"export function paretoRows\b(.*?)\n\}", state, re.DOTALL)
+    assert block, "`paretoRows` is not a single readable function"
+    body = block.group(1)
+    # Both sides of the pair have to be keyed, or the collapse is on one plan.
+    assert "legs" in body, (
+        "`paretoRows` never keys the optimum on its `legs`, so two different "
+        "optimal plans could collapse into one detent"
+    )
+    assert "convoys" in body, (
+        "`paretoRows` never keys the naive plan on its `convoys`, so a lambda "
+        "where the naive plan moves and the optimum does not would collapse -- "
+        "and that lambda exists on the shipped theater"
+    )
+    assert "export function costRiskSpine" in state, (
+        "state.js exports no `costRiskSpine`"
+    )
+    spine = re.search(r"export function costRiskSpine\b(.*)", state, re.DOTALL)
+    assert "paretoRows" in spine.group(1), (
+        "the spine does not build itself from `paretoRows`, so the detents the "
+        "keyboard walks and the blocks the panel marks are two computations of "
+        "the same thing"
+    )
+
+
+def test_the_panel_keeps_all_eight_lambda_rows(assets):
+    """Eight rows, with the duplicates visible AS duplicates.
+
+    The dedup only pays for itself as a sentence -- "the frontier has four
+    points, not eight; lambda is a dial with detents" -- if the collapsed rows
+    are still on screen to be pointed at. A four-row detent list would make the
+    claim unprovable from the panel.
+    """
+    graph = COMMENT.sub(" ", assets["graph.js"])
+    assert "export function buildPareto" in graph, (
+        "graph.js exports no `buildPareto`. The Pareto table is a built slot "
+        "like every other, and the render pass never appends."
+    )
+    body = re.search(r"export function buildPareto\b(.*?)\n\}", graph, re.DOTALL)
+    assert body, "`buildPareto` is not a single readable function"
+    assert "duplicate" in body.group(1), (
+        "no row is marked as a duplicate, so the eight rows read as eight "
+        "distinct plans and the detent claim cannot be made from the panel"
+    )
+    # The row carries its DETENT and never a beat index. A beat index here
+    # would be the DOM builder working out where in the spine a detent starts
+    # -- beat-engine knowledge in the module that builds elements, and wrong
+    # the day the spine gains a third beat, with every click landing somewhere
+    # nobody asked for and nothing raised.
+    assert re.search(r"dataset\.unit\s*=", body.group(1)), (
+        "a Pareto row carries no `data-unit`; neither the click target nor the "
+        "active detent's contiguous block could be resolved from it"
+    )
+    assert not re.search(r"dataset\.beat\s*=", body.group(1)), (
+        "a Pareto row carries a beat index, which means graph.js is computing "
+        "where a detent starts in the spine. Addressing the unit by ordinal is "
+        "the beat engine's job and `jumpToUnit` already does it."
+    )
+
+
+def test_the_pareto_table_carries_beat_state_and_the_timeline_is_empty(assets):
+    """Three slots where the others are four, ON PURPOSE.
+
+    A four-row detent list beside eight lambda rows would be the same
+    information twice in two components that can disagree, so the beat timeline
+    is empty here and the Pareto table is promoted to be the view's timeline.
+    An implementer WILL be tempted to put the empty list back; the instruction
+    not to is asserted along with the behaviour, because the behaviour alone
+    reads as an oversight.
+    """
+    views = assets["views.js"]
+    assert "showsTimeline" in views, (
+        "views.js has no `showsTimeline`. Whether a view owns the beat "
+        "timeline is a property of the view, declared beside its layer set -- "
+        "not a branch buried in the page's repaint."
+    )
+    block = re.search(r'id:\s*"cost-risk"(.*?)\n  \},', views, re.DOTALL)
+    assert block, "views.js declares no `cost-risk` view"
+    assert re.search(r"timeline:\s*false", block.group(1)), (
+        "the cost-risk view does not declare `timeline: false`, so the beat "
+        "timeline would be populated beside the Pareto table -- the same beat "
+        "state in two components that can disagree"
+    )
+    page = COMMENT.sub(" ", assets["index.html"])
+    assert "showsTimeline" in page, (
+        "index.html builds the beat timeline without asking whether this view "
+        "owns it"
+    )
+    # The standing instruction, kept where the next implementer will read it.
+    assert "Do not" in assets["views.js"], (
+        "nothing records that the empty timeline slot is deliberate. Left "
+        "unsaid, the next reader fixes it."
+    )
+
+
+def test_a_pareto_row_click_reaches_that_lambda(assets):
+    """Pointer parity, and nothing more.
+
+    A row click is a jump to that detent -- a pointer action duplicating a
+    keyboard one exactly, reaching no state the keyboard cannot, which is the
+    rule every pointer action on this page lives under.
+    """
+    page = COMMENT.sub(" ", assets["index.html"])
+    binder = re.search(r"function bindPareto\(\)\s*\{(.*?)\n    \}", page, re.DOTALL)
+    assert binder, (
+        "index.html has no `bindPareto()`. The Pareto table is this view's "
+        "timeline, and its rows are the only way a pointer reaches a detent."
+    )
+    assert "jumpToUnit" in binder.group(1), (
+        "a Pareto row click does not reach `jumpToUnit`, so it either does "
+        "nothing or resolves a detent to a beat by some second route that can "
+        "disagree with the digit keys"
+    )
+    # And it is inert in the views whose beat state it does NOT carry. The
+    # table is a fact about the dataset, so it outlives the view that reads it
+    # -- but `setBeat`/`jumpToUnit` act on whatever spine is active, so an
+    # ungated click in Flow & Cut would silently jump the augmentation ladder
+    # to wherever detent four happens to land. No keypress in Flow & Cut means
+    # "detent 4 of Day 1", and a pointer may never reach what the keyboard
+    # cannot.
+    assert "showsTimeline" in binder.group(1), (
+        "a Pareto row click is not gated on this view owning the table's beat "
+        "state, so clicking one while another view is up drives that view's "
+        "spine -- a pointer reaching a state no key can"
+    )
+    assert "bindPareto()" in page, "bindPareto is defined but never called"
+
+
+def test_the_two_violations_are_structurally_different(assets, stylesheet):
+    """A too-small pipe and a bad assignment are not the same failure.
+
+    The room has to see an ASSIGNMENT error rather than merely a lane that is
+    too narrow, so the over-stock hub is a mark on the NODE and the
+    over-capacity lane is a mark on the LANE. Two shapes, not two shades of one.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    declared = re.search(r"export const NODE_STATES = \[(.*?)\]", state, re.DOTALL)
+    assert declared, (
+        "state.js declares no NODE_STATES. The node states are a closed list "
+        "for the same reason the row states are: the render pass iterates it, "
+        "so a fourth state is one edit plus its stylesheet rule."
+    )
+    assert set(re.findall(r'"([a-z-]+)"', declared.group(1))) == set(NODE_STATES), (
+        f"the application's node-state list no longer matches the "
+        f"{NODE_STATES} this file names"
+    )
+    assert "export function nodeStates" in state, (
+        "state.js exports no `nodeStates`. It is the node-side twin of "
+        "`laneStates`: one call classes the node and feeds the headline count, "
+        "so a count and its certificate cannot come apart."
+    )
+    # Each state paints something, or it is a class that has never fired.
+    for node_state in NODE_STATES:
+        assert f".node.{node_state}" in stylesheet, (
+            f"node state `{node_state}` has no `.node.{node_state}` rule in "
+            f"style.css; it would be computed and never seen"
+        )
+    # The lane's violation stays a LANE mark, and the hub's a NODE mark.
+    assert ".violation" in stylesheet, "no `.violation` lane mark rule"
+    assert re.search(r"\.node\.overdrawn[^{]*\{", stylesheet), (
+        "the over-stock hub paints nothing on the node itself, so it would be "
+        "read as another lane problem"
+    )
+
+
+def test_every_supply_node_renders_including_the_idle_ones(assets):
+    """An overdrawn hub beside one with spare stock makes the argument itself.
+
+    So the healthy hubs are drawn too, with their own dispatched-against-stock
+    readout -- filtering to the violating ones would leave the room looking at
+    a lane problem with no allocation to compare it against.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    spine = re.search(r"export function costRiskSpine\b(.*)", state, re.DOTALL)
+    assert spine, "state.js exports no `costRiskSpine`"
+    body = spine.group(1)
+    assert "sources" in body, (
+        "the spine never reads the naive plan's `sources`, which is the list "
+        "carrying every supply node including the idle ones"
+    )
+    assert "dispatched" in body and "stock" in body, (
+        "the spine carries no dispatched/stock pair, so a healthy hub would "
+        "render identically to one that was never asked for anything"
+    )
+    # The readout is composed in the render pass from a pair on the state, the
+    # same split the two-track pair already uses: state holds the numbers, the
+    # render pass turns them into a string.
+    render = COMMENT.sub(" ", assets["render.js"])
+    assert "dispatch" in render, (
+        "render.js writes no dispatched/stock readout onto the supply nodes"
+    )
+    # And no filter drops the healthy ones on the way through.
+    assert not re.search(r"sources\s*\.\s*filter", body), (
+        "the spine filters the supply nodes; every one of them renders, and "
+        "the idle healthy hub is half of Day 1's argument"
+    )
+
+
+def test_unreachability_and_infeasibility_are_not_confused(assets, stylesheet):
+    """`found: false` is why the frontend never reconciles two lists.
+
+    The convoy count equals the demand-node count whether or not a destination
+    can be reached, so an unreachable base is a convoy that failed rather than
+    a missing row -- and it must not render as one that was served illegally.
+    A base nothing can reach and a base served by cheating are different
+    lessons.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    assert "found" in state, (
+        "state.js never reads a convoy's `found` flag, so an unreachable "
+        "destination is indistinguishable from a served one"
+    )
+    # The two states paint differently, and the difference is not hue alone:
+    # unreachable adopts the `removed` vocabulary -- absent rather than
+    # alarming -- where illegal wears the violation hue.
+    unreachable = re.search(r"\.node\.unreachable[^{]*\{([^}]*)\}", stylesheet)
+    illegal = re.search(r"\.node\.illegal[^{]*\{([^}]*)\}", stylesheet)
+    assert unreachable and illegal, (
+        "one of the two demand-node failures has no rule of its own"
+    )
+    assert unreachable.group(1) != illegal.group(1), (
+        "an unreachable base and an illegally-served one paint identically; "
+        "unreachability and infeasibility would be read as one failure"
+    )
+    assert "--removed" in unreachable.group(1), (
+        "the unreachable base does not reach for the `removed` vocabulary. "
+        "Grey-and-struck reads as ABSENT, which is what it is; the violation "
+        "hue would read as alarming, which is the other failure."
+    )
+    assert "--violation" in illegal.group(1), (
+        "the illegally-served base does not wear the violation hue, so it "
+        "would not read as part of the plan's failure"
+    )
+
+
+def test_the_delta_is_one_headline_pair_of_costs(assets):
+    """The illegal plan looks 14% cheaper, precisely because it is cheating.
+
+    One number the instructor can say out loud. The naive plan's notional cost
+    against the feasible optimum's -- claimed on the flip, which is the view
+    that owns it, because the two states are never simultaneously visible.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    spine = re.search(r"export function costRiskSpine\b(.*)", state, re.DOTALL)
+    body = spine.group(1)
+    delta = re.search(r"\.delta\s*=\s*\{(.*?)\}", body, re.DOTALL)
+    assert delta, "the cost-risk spine never claims the A/B pair"
+    assert "notional_cost" in delta.group(1), (
+        "the pair's `before` is not the naive plan's notional cost, which is "
+        "the number carrying its own asterisk"
+    )
+    assert "transit_cost" in delta.group(1), (
+        "the pair's `after` is not the feasible optimum's transit cost"
+    )
+
+
+def test_the_headline_carries_a_second_violation_count(assets):
+    """Two counts, because there are two violations.
+
+    `Over cap` counts lanes and `Over stock` counts hubs. One merged count
+    would say a number the room cannot act on: it would not tell them whether
+    the plan needs a bigger pipe or a different assignment.
+    """
+    graph = COMMENT.sub(" ", assets["graph.js"])
+    assert re.search(r'id:\s*"overdrawn"', graph), (
+        "graph.js declares no `overdrawn` headline slot"
+    )
+    render = COMMENT.sub(" ", assets["render.js"])
+    assert "overdrawn" in render, (
+        "nothing counts the over-stock hubs into the headline, so the second "
+        "violation has a certificate on screen and no number"
+    )
+
+
+def test_the_naive_plan_is_read_and_never_recomputed(assets):
+    """No client-side plan arithmetic, ever -- the standing ban, on Day 1.
+
+    `over` and `overage` are properties in the core and plain fields on the
+    wire precisely so that the frontend colours a lane from them. Recomputing
+    `load > cap` in JavaScript is how a rounding difference puts a red lane on
+    the projector that the API does not agree is red.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    spine = re.search(r"export function costRiskSpine\b(.*)", state, re.DOTALL)
+    body = spine.group(1)
+    assert ".over" in body, (
+        "the spine never reads the server's `over` flag; the violation set "
+        "would have to be derived here"
+    )
+    for derived in (r"load\s*>\s*", r"dispatched\s*>\s*", r"\.cap\s*<"):
+        assert not re.search(derived, body), (
+            f"the spine compares a load against a capacity itself "
+            f"(`{derived}`). Both `over` flags are on the wire; a second "
+            f"comparison here is one the API can disagree with."
+        )
+
+
+def test_the_degenerate_combination_is_labelled_not_struck(assets):
+    """Reachable, and it says why it is flat.
+
+    Striking the combination was rejected because view-aware behaviour is
+    exactly the hidden modality the key assignments were designed to avoid.
+    Authoring risk into the textbook file was rejected because it invents
+    meaningless numbers the room will ask about, in a dataset tuned for a
+    completely different property. So the headline states it instead.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    assert DEGENERATE_NOTE in state, (
+        f"nothing states {DEGENERATE_NOTE!r}. On the textbook set every cost "
+        f"is 1 and there is no risk key, so lambda multiplies zero and all "
+        f"eight lambdas return one plan -- a one-beat ladder with the Day 1 "
+        f"punchline mute and nothing on screen saying so."
+    )
+    # And it is a HEADLINE sentence with a slot of its own, not a repurposed
+    # A/B label: the pair means "these two numbers differ", and a sentence in
+    # that slot would be a claim about a comparison nobody made.
+    graph = COMMENT.sub(" ", assets["graph.js"])
+    assert "note" in graph, (
+        "graph.js builds no headline note slot for the sentence to be written "
+        "into"
+    )
+    # Nothing anywhere strikes a view for a dataset.
+    page = COMMENT.sub(" ", assets["index.html"])
+    for guard in (r"disabled\s*=", r"cost-risk.{0,200}textbook"):
+        assert not re.search(guard, page, re.DOTALL), (
+            "index.html makes a view conditional on the dataset. A degenerate "
+            "combination is labelled, not struck -- view-aware behaviour is "
+            "the hidden modality the key assignments exist to avoid."
+        )
+
+
+def test_day_one_authors_the_violation_hue_the_token_block_was_waiting_for(
+        assets, stylesheet):
+    """The debt the palette recorded, paid by the ticket that owns the mark.
+
+    `--panel-tick-violating` shipped as a provisional stand-in with a note
+    saying the violation has no canvas hue yet and that the ticket authoring it
+    should re-derive the tick. This is that ticket.
+    """
+    defined = _defined_tokens(stylesheet)
+    assert "--violation" in defined, (
+        "style.css defines no `--violation`. The violation was a provisional "
+        "panel tick with no canvas hue behind it; Day 1 is the view that "
+        "draws it."
+    )
+    colours = _colour_tokens(stylesheet)
+    assert colours["--violation"] != colours["--node-demand"], (
+        "the violation hue is exactly the demand node's. Over-capacity marks "
+        "appear beside demand nodes, which is the one place the two must not "
+        "be confusable."
+    )
+    # Both violations reach for the one hue, so "this is the plan failing" is
+    # one colour on the board rather than two.
+    for selector in (".violation", ".node.overdrawn"):
+        rule = re.search(rf"{re.escape(selector)}[^{{]*\{{([^}}]*)\}}", stylesheet)
+        assert rule and "--violation" in rule.group(1), (
+            f"`{selector}` does not paint with `--violation`"
+        )

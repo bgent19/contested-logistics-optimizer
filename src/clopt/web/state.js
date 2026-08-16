@@ -103,6 +103,68 @@ export const state = {
     against: new Set(),
   },
 
+  /* ---- the node subsets, which are NOT lane subsets ------------------------
+   * Day 1's second failure lives here, and it lives in its own object rather
+   * than as three more sets in `marks` because that is the whole point of it:
+   * an over-subscribed lane is a too-small pipe and an over-drawn hub is a bad
+   * ASSIGNMENT, and the room has to see two structurally different failures
+   * rather than two shades of one. A node subset beside the lane subsets is
+   * what makes that structural instead of chromatic.
+   *
+   * All three are filled by the Cost & Risk spine off the naive plan's own
+   * flags, and every one of them is READ: `over` is a property in the core and
+   * a plain field on the wire precisely so that no client ever compares a load
+   * against a capacity itself. */
+  nodes: {
+    /* Supply hubs asked to dispatch past their stock. */
+    overdrawn: new Set(),
+    /* Demand nodes no convoy reaches at all -- the `found: false` case. */
+    unreachable: new Set(),
+    /* Demand nodes served, but only by a plan that cheats: their convoy's
+     * origin is overdrawn, or its route crosses an over-capacity lane. */
+    illegal: new Set(),
+  },
+
+  /**
+   * What each supply hub was asked for against what it holds, `nodeId ->
+   * {dispatched, stock}`.
+   *
+   * EVERY supply node, including the idle healthy ones, and that is the
+   * argument rather than a completeness reflex: an overdrawn hub sitting beside
+   * a hub with spare stock says "this is an allocation error" without the
+   * instructor having to say it. Filtered to the violating hubs, the screen
+   * shows a lane problem and nothing to compare it against.
+   *
+   * A pair of numbers rather than the composed string, exactly like `tracks`
+   * above: the state holds what the server said and the render pass decides how
+   * to write it, so the formatting lives in one place.
+   */
+  dispatch: new Map(),
+
+  /**
+   * Which Pareto detent the current beat sits in, 1-based, or `null`.
+   *
+   * The one thing the promoted Pareto table needs that a lane subset cannot
+   * carry: the table's rows are lambdas and the beats are detents, so marking
+   * the active detent's contiguous block means knowing which block that is.
+   * Set by the beat rather than derived in the render pass, so the marked rows
+   * and the beat on screen are one decision.
+   */
+  detent: null,
+
+  /**
+   * One sentence for the headline, or `null`.
+   *
+   * The slot a degenerate view x dataset combination speaks through. A
+   * combination is LABELLED, not struck: striking it would be view-aware
+   * behaviour, which is the hidden modality the key assignments were designed
+   * to avoid. Deliberately not the A/B pair's label -- that pair means "these
+   * two numbers differ", and a sentence in it would claim a comparison nobody
+   * made.
+   */
+  note: null,
+
+
   /* ---- the current beat's slice of the trace ------------------------------
    * Both are READ off the server's trace and never derived here. `cap - flow`
    * is the subtraction this pair exists to make unnecessary: one line, correct
@@ -214,6 +276,11 @@ export function setDataset(datasetId) {
    * rows in the new theater that certify a cut of the old one. */
   clearPin();
   for (const set of Object.values(state.marks)) set.clear();
+  /* The node subsets go with the lane subsets, for the same reason: a node id
+   * is only meaningful within one dataset, and a stale `overdrawn` would flag a
+   * hub of the new theater on the strength of the old one's allocation. */
+  for (const set of Object.values(state.nodes)) set.clear();
+  state.dispatch.clear();
 }
 
 /* ---- the beat engine ------------------------------------------------------
@@ -366,6 +433,14 @@ function firstBeatOfUnitAt(ordinal) {
 export function resolveBeat() {
   clearPin();
   for (const set of Object.values(state.marks)) set.clear();
+  /* Day 1's node subsets and its two headline extras reset with everything
+   * else. A beat that inherited the last beat's overdrawn hub would flag the
+   * right hub stepping forwards and the wrong one stepping back, which is
+   * exactly what the idempotence rule exists to make impossible. */
+  for (const set of Object.values(state.nodes)) set.clear();
+  state.dispatch.clear();
+  state.detent = null;
+  state.note = null;
   state.throughput = null;
   state.cut = null;
   state.tracks = null;
@@ -1033,6 +1108,383 @@ export function interdictionSpine(ladder, maxflow, laneOf) {
   }
 
   return beats;
+}
+
+/* ---- the Cost & Risk spine (issue #44) ------------------------------------
+ *
+ * Two payloads in, one complete spine out, and the two are a MATCHED PAIR: the
+ * server takes the same lambda list for both and answers in the same order, so
+ * `sweep[i]` and `naive[i]` are the optimum and the collapse at one lambda and
+ * the A/B flip is a swap at one index. Nothing here joins two lists.
+ *
+ * Pure and under the same standing ban as the other two spines: every number is
+ * copied off a payload. In particular NO LOAD IS EVER COMPARED AGAINST A
+ * CAPACITY HERE. `over` and `overage` are properties in the core and plain
+ * fields on the wire precisely so a client can colour a lane from them, and a
+ * second comparison in JavaScript is how a rounding difference puts a red lane
+ * on the projector that the API does not agree is red.
+ */
+
+/**
+ * The optimum's plan at one lambda, as an order-independent key.
+ *
+ * Sorted rather than taken in payload order, so "the same plan" is a fact about
+ * the legs and not about how the solver happened to enumerate them.
+ */
+function legsKey(legs) {
+  return legs
+    .map((leg) => `${leg.src}>${leg.dst}:${leg.flow}`)
+    .sort()
+    .join("|");
+}
+
+/**
+ * The naive plan at one lambda, as an order-independent key.
+ *
+ * The convoys alone, and that is sufficient rather than partial: the server
+ * derives the lane loads and the hub dispatch totals FROM the convoys, so two
+ * lambdas with the same convoys have the same violations by construction.
+ * Keying the derived lists too would be the same question asked three times.
+ */
+function convoysKey(convoys) {
+  return convoys
+    .map((convoy) => `${convoy.dst}<${convoy.origin}:${convoy.quantity}:`
+                     + `${convoy.found ? convoy.path.join(">") : "-"}`)
+    .sort()
+    .join("|");
+}
+
+/**
+ * Every lambda row, each tagged with the Pareto detent it belongs to.
+ *
+ * **THE COARSE UNIT IS A DISTINCT PARETO POINT, NOT A LAMBDA VALUE.** The eight
+ * default lambdas collapse to four distinct plans on the shipped theater, so
+ * walking lambda positions would make the first four presses of Day 1 change
+ * nothing on screen -- the exact dead-key failure the beat model exists to
+ * prevent, sitting in the default sweep at the worst possible moment.
+ *
+ * **The dedup is on the PAIR, and a block collapses only if NEITHER side
+ * moved.** Deduping on the optimum alone is the same bug one step later: the
+ * theater has a lambda where the naive plan moves and the optimum does not, and
+ * collapsing it would hide the ticket's own punchline -- that the naive plan
+ * fails at every lambda and gets *worse*.
+ *
+ * ALL EIGHT ROWS COME BACK, tagged rather than filtered. The dedup only pays
+ * for itself as a sentence -- "the frontier has four points, not eight; lambda
+ * is a dial with detents" -- if the collapsed rows are still on screen to be
+ * pointed at. `first` is what lets the panel draw them as duplicates and what
+ * lets the spine below take one detent per block.
+ *
+ * ONE IMPLEMENTATION, two consumers -- the panel's rows and the spine's detents
+ * are the same decision. It is *called* twice, once by `costRiskSpine` and once
+ * by the page for the table, which is safe precisely because it is pure: same
+ * payloads in, same tagging out. What must never happen is a second piece of
+ * code deciding where a block ends, because then the row the panel marks and
+ * the beat the keyboard reaches could disagree mid-sentence.
+ */
+export function paretoRows(sweep, naive) {
+  const rows = [];
+  let previous = null;
+  let detent = 0;
+  sweep.forEach((optimum, index) => {
+    const collapse = naive[index];
+    const key = `${legsKey(optimum.legs)}#${convoysKey(collapse.convoys)}`;
+    const first = key !== previous;
+    if (first) detent += 1;
+    previous = key;
+    rows.push({
+      index,
+      detent,
+      first,
+      lambda: optimum.risk_aversion,
+      fill: optimum.fill_rate,
+      cost: optimum.transit_cost,
+      risk: optimum.risk_exposure,
+      notional: collapse.notional_cost,
+    });
+  });
+  return rows;
+}
+
+/**
+ * A lane named by a directed pair, or a build-time failure.
+ *
+ * Resolved when the spine is BUILT rather than inside a beat's `apply`, for the
+ * reason everything else in this application is prefetched: a failure at build
+ * time happens while the page is loading, and a failure inside `apply` happens
+ * on the keypress that reaches it, in front of a room.
+ *
+ * It throws rather than skipping. Every lane a plan names is a stored lane --
+ * unlike a trace path, which legitimately walks terminal arcs that have no lane
+ * -- so a miss here is the payload and the drawn network disagreeing about what
+ * this theater contains. Skipped, it would drop the lane from the picture AND
+ * from the `Over cap` count, which is read off the row flags: a headline number
+ * quietly too small, with nothing raised anywhere.
+ */
+function laneAt(laneOf, src, dst) {
+  const found = laneOf(src, dst);
+  if (!found) {
+    throw new Error(
+      `the naive plan uses ${src}→${dst}, which this network has no lane for `
+      + `-- the plan and the drawn theater disagree`,
+    );
+  }
+  return found.edgeId;
+}
+
+/** The lanes one convoy's route walks, as edge ids. */
+function convoyLanes(convoy, laneOf) {
+  const lanes = [];
+  for (let i = 0; i + 1 < convoy.path.length; i += 1) {
+    lanes.push(laneAt(laneOf, convoy.path[i], convoy.path[i + 1]));
+  }
+  return lanes;
+}
+
+/**
+ * A detent's lambda block, listed rather than ranged -- `10`, or `0, 1, 2, 5`.
+ *
+ * Listed because the sweep is eight sampled values and not an interval: written
+ * `0-5` the block would claim lambda 3 and lambda 4 collapsed into it too, and
+ * neither was ever computed. The detent is the set of lambdas actually tried
+ * that landed on this plan, and saying exactly which is the honest form of the
+ * sentence the dedup exists for.
+ */
+function detentLambdas(rows, detent) {
+  return rows
+    .filter((row) => row.detent === detent)
+    .map((row) => row.lambda)
+    .join(", ");
+}
+
+/**
+ * The Cost & Risk spine: two beats per Pareto detent.
+ *
+ * **Beat *a* is the naive plan with its violations; beat *b* is the flip to the
+ * feasible optimum, with the delta in the headline.** Proposal then
+ * consequence, like every other spine in this application, and here the
+ * proposal is the plan the room itself proposes out loud: serve each
+ * destination from its own cheapest hub. Beat *b* is the answer, and the flip
+ * is the verb -- the two states are never simultaneously visible, which is what
+ * makes one A/B pair the right shape and a per-lane delta column the wrong one.
+ *
+ * The two failures stay two things. An over-capacity lane is a mark on the LANE
+ * and an over-stock hub is a mark on the NODE, so the room reads an *assignment*
+ * error rather than merely a too-small pipe -- and every supply node renders,
+ * idle healthy ones included, because an overdrawn hub beside a hub with spare
+ * stock makes the allocation argument by itself.
+ *
+ * `network` is the pristine drawn network, and it is here for one question
+ * only: whether this dataset carries any risk at all. See the note on the
+ * degenerate combination below.
+ */
+export function costRiskSpine(sweep, naive, laneOf, network) {
+  const rows = paretoRows(sweep, naive);
+  if (!rows.length) return [];
+
+  /* The degenerate view x dataset combination, LABELLED RATHER THAN STRUCK.
+   *
+   * On the textbook set every cost is 1 and no lane carries a risk key, so
+   * lambda multiplies zero and all eight lambdas return one identical plan: a
+   * one-beat ladder with Day 1's punchline mute. Striking the combination was
+   * rejected because view-aware behaviour is exactly the hidden modality the
+   * key assignments were designed to avoid, and authoring risk into that file
+   * was rejected because it invents meaningless numbers the room will ask
+   * about, in a dataset tuned for a completely different property.
+   *
+   * So the headline says it instead. Both halves are required: a single-point
+   * frontier with real risk data is a fact about that theater and not a
+   * shortcoming to apologise for, and risk-free data that still moved would
+   * make the sentence false. */
+  const noRisk = network.edges.every((edge) => edge.risk === 0);
+  const singlePoint = rows[rows.length - 1].detent === 1;
+  const note = noRisk && singlePoint
+    ? "no risk data; frontier is a single point"
+    : null;
+
+  const beats = [];
+  for (const row of rows) {
+    /* A collapsed lambda is not a second detent. It keeps its panel row -- see
+     * `paretoRows` -- but it gets no beats, which is the whole point: the
+     * keyboard's coarse unit is the Pareto point the instructor names out loud,
+     * and four of the eight presses would otherwise change nothing. */
+    if (!row.first) continue;
+
+    const optimum = sweep[row.index];
+    const collapse = naive[row.index];
+    const budget = detentLambdas(rows, row.detent);
+
+    /* Everything resolved to edge ids and node ids up front, so a lane the
+     * diagram cannot draw fails while the page is loading rather than on the
+     * keypress that reaches it. */
+    const loads = collapse.lanes.map((lane) => ({
+      edgeId: laneAt(laneOf, lane.src, lane.dst),
+      load: lane.load,
+      /* READ, never derived. The server already decided this. */
+      over: lane.over,
+    }));
+    const overLanes = new Set();
+    for (const lane of loads) if (lane.over) overLanes.add(lane.edgeId);
+
+    /* Every supply node, with its readout, and separately the ones the plan
+     * overdraws. A loop rather than a filter because both lists come out of the
+     * one pass: the healthy hubs are half of Day 1's argument and must not be
+     * filtered away on the route to finding the sick one. */
+    const dispatch = [];
+    const overdrawn = [];
+    for (const source of collapse.sources) {
+      dispatch.push([source.id, { dispatched: source.dispatched, stock: source.stock }]);
+      if (source.over) overdrawn.push(source.id);
+    }
+    const overHubs = new Set(overdrawn);
+
+    /* The two demand-node failures, which are different lessons and must not
+     * render as one. `found: false` is a convoy that FAILED rather than a
+     * missing row -- the convoy count equals the demand-node count either way,
+     * which is why this frontend never reconciles two lists -- and it means
+     * nothing reaches that base at all. An illegally-served base is the other
+     * thing: it is in the plan, and the plan cheats to get there.
+     *
+     * The illegal test is a set-membership join over flags the server already
+     * decided, never a recomputation of them. No shipped dataset has an
+     * unreachable base today, so that branch is the guard reporting idle -- and
+     * it is what would tell the room if that ever stopped being true. */
+    const routeLanes = [];
+    const unreachable = [];
+    const illegal = [];
+    for (const convoy of collapse.convoys) {
+      if (!convoy.found) {
+        unreachable.push(convoy.dst);
+        continue;
+      }
+      const walked = convoyLanes(convoy, laneOf);
+      for (const edgeId of walked) routeLanes.push(edgeId);
+      if (overHubs.has(convoy.origin) || walked.some((id) => overLanes.has(id))) {
+        illegal.push(convoy.dst);
+      }
+    }
+
+    const legs = optimum.legs.map((leg) => ({
+      edgeId: laneAt(laneOf, leg.src, leg.dst),
+      flow: leg.flow,
+    }));
+
+    /* beat a -- the proposal: the plan the room proposes out loud, superimposed
+     * and failing. The lane numerals are LOADS rather than flows, which is the
+     * claim: this is what the convoys ask of each lane, and the ledger's own
+     * capacity column beside it is what makes an over-subscribed lane visibly
+     * over-subscribed. */
+    beats.push({
+      unit: row.detent,
+      phase: "a",
+      label: `Detent ${row.detent} (λ ${budget}): naive plan — `
+        + `${overLanes.size} lane(s) over capacity, ${overdrawn.length} hub(s) `
+        + `over stock`,
+      apply: (current) => {
+        current.detent = row.detent;
+        current.note = note;
+        for (const lane of loads) {
+          current.flows.set(lane.edgeId, lane.load);
+          current.marks.hot.add(lane.edgeId);
+          if (lane.over) current.marks.violating.add(lane.edgeId);
+        }
+        for (const edgeId of routeLanes) current.marks.onPath.add(edgeId);
+        for (const [id, pair] of dispatch) current.dispatch.set(id, pair);
+        for (const id of overdrawn) current.nodes.overdrawn.add(id);
+        for (const id of unreachable) current.nodes.unreachable.add(id);
+        for (const id of illegal) current.nodes.illegal.add(id);
+        /* CAPACITY, not cost and risk, on the beat that compares a load
+         * against a capacity. The two share the anchor's lower row and overlap
+         * if both are on -- which is why the catalog splits them at all -- so
+         * the beat has to choose, and on beat *a* the sentence is "this lane is
+         * asked for 90 and holds 60". Cost and risk are what explains why the
+         * convoys chose these routes; they come back on the flip, where the
+         * frontier's trade-off is the subject.
+         *
+         * This is a beat overriding the view's entry table, which is exactly
+         * what `views.js` says an entry table is for: a view's layers are where
+         * it opens, not an invariant it holds for every beat. */
+        setLayers(current, ["naive", "route", "caps", "flow"],
+                  ["costrisk", "residual", "path", "cut"]);
+      },
+    });
+
+    /* beat b -- the consequence: the feasible optimum, and what it costs.
+     *
+     * The violations come off with the plan that caused them, and the naive and
+     * route layers go with them: what is left on screen is a plan that can
+     * actually be executed. The A/B pair is claimed here and this is the view it
+     * belongs to -- the illegal plan looks cheaper precisely because it is
+     * buying capacity that does not exist, and that is one number the instructor
+     * can say out loud rather than twelve nobody can. */
+    beats.push({
+      unit: row.detent,
+      phase: "b",
+      /* Risk is written to two places, as it is everywhere else on this page.
+       * It is a sum of quantities times per-lane risks, so it arrives with
+       * binary-fraction noise -- `47.699999999999996` -- where cost, a sum of
+       * quantities times whole costs, does not. Rounding for display is not
+       * derivation: the number is still the server's, and this only decides how
+       * many of its digits the back of the room is asked to read. */
+      label: `Detent ${row.detent} (λ ${budget}): feasible optimum, `
+        + `cost ${optimum.transit_cost}, risk ${optimum.risk_exposure.toFixed(2)}`,
+      apply: (current) => {
+        current.detent = row.detent;
+        current.note = note;
+        for (const leg of legs) {
+          current.flows.set(leg.edgeId, leg.flow);
+          current.marks.hot.add(leg.edgeId);
+        }
+        current.delta = {
+          label: "Cost",
+          before: collapse.notional_cost,
+          after: optimum.transit_cost,
+        };
+        /* Cost and risk come back for the flip: the optimum's subject is what
+         * the plan buys and what it exposes, which is the frontier this whole
+         * view walks. Capacity goes off with the violation it was there to be
+         * compared against. */
+        setLayers(current, ["costrisk", "flow"],
+                  ["naive", "route", "caps", "residual", "path", "cut"]);
+      },
+    });
+  }
+
+  return beats;
+}
+
+/**
+ * The three node states, and the only list of them in the application code.
+ *
+ * The node-side twin of `ROW_STATES`, and a separate list rather than three
+ * more members of that one because that separation IS the second violation's
+ * structure: a lane subset says a pipe is too small and a node subset says an
+ * assignment is wrong, and merging them would leave the room with two shades of
+ * one failure. `render.js` iterates this array to toggle the classes, so a
+ * fourth state is one edit here plus its stylesheet rule.
+ */
+export const NODE_STATES = ["overdrawn", "unreachable", "illegal"];
+
+/**
+ * Every state one node is in right now, as flags -- the node-side twin of
+ * `laneStates`.
+ *
+ * One call, two consumers: the node's classes and the headline's `Over stock`
+ * count. Because the render pass counts these flags and classes the node from
+ * the same call, a headline number that disagreed with its nodes would have to
+ * disagree with itself.
+ *
+ * The three are mutually exclusive in practice -- `overdrawn` is a supply node
+ * and the other two are demand nodes -- but they are returned as independent
+ * flags rather than as one role, because nothing here should depend on that
+ * staying true of a dataset nobody has authored yet.
+ */
+export function nodeStates(current, nodeId) {
+  return {
+    overdrawn: current.nodes.overdrawn.has(nodeId),
+    unreachable: current.nodes.unreachable.has(nodeId),
+    illegal: current.nodes.illegal.has(nodeId),
+  };
 }
 
 /**
