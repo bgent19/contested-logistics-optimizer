@@ -15,6 +15,8 @@ const ENDPOINTS = {
   scenario: "/scenario",
   maxflow: "/maxflow",
   interdict: "/interdict",
+  sweep: "/sweep",
+  naive: "/naive",
 };
 
 async function getJSON(path, params) {
@@ -88,4 +90,43 @@ export function fetchMaxflow(dataset, threat) {
  */
 export function fetchLadder(dataset, threat) {
   return getJSON(ENDPOINTS.interdict, { dataset, threat, ladder: "true" });
+}
+
+/* ---- Day 1's matched pair -------------------------------------------------
+ *
+ * `/sweep` and `/naive` are a MATCHED PAIR and the pairing is the contract:
+ * they take the same lambda list with the same default and answer with entries
+ * in the same order, so the two arrays are indexed by the same position -- one
+ * for the optimum, one for the collapse -- and the A/B flip is a swap at one
+ * index rather than a join.
+ *
+ * Neither passes a `lambdas` parameter, and that is deliberate rather than an
+ * omission. The server declares the default list once and both endpoints share
+ * that one declaration, so sending it from here would be a third copy of the
+ * eight values that could drift from the two that matter. The frontend's job is
+ * to ask both endpoints the same question, and asking neither is the only way
+ * to be sure it did.
+ */
+
+/**
+ * The whole cost/risk frontier -- every lambda's optimum, plans included.
+ *
+ * One request per dataset, like the trace and the ladder above, and for the
+ * same reason: Day 1 walks the frontier in both directions at the front of the
+ * room, so anything a keypress can reach is in hand before the first keypress.
+ */
+export function fetchSweep(dataset, threat) {
+  return getJSON(ENDPOINTS.sweep, { dataset, threat });
+}
+
+/**
+ * Day 1's counterexample at every lambda -- one complete naive plan each.
+ *
+ * Complete rather than a delta against the lambda before it, which is the
+ * server's choice and the right one: a delta format saves bytes on a payload
+ * measured in kilobytes and buys a reconstruction step this frontend could get
+ * wrong, mid-class, with nothing raised anywhere.
+ */
+export function fetchNaive(dataset, threat) {
+  return getJSON(ENDPOINTS.naive, { dataset, threat });
 }

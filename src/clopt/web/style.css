@@ -156,6 +156,41 @@
   --path:               #f0e442;
   --path-w:             11;
 
+  /* Day 1's superimposed convoy routes. The PATH'S OWN HUE, reached for rather
+   * than restated, because on screen it is the same fact -- this lane is on the
+   * walk the beat is asking the room to trace -- and a second yellow would be a
+   * distinction with nothing behind it. What differs is the layer that shows
+   * it, which is a fact about the catalog rather than about the lane.
+   *
+   * Narrower than the path at 11, and that is the whole reason it is a weight
+   * of its own: the route sits INSIDE the violation halo below, and a route as
+   * wide as the halo would leave no halo to see. */
+  --route:              var(--path);
+  --route-w:            7;
+
+  /* The violation -- an over-capacity lane, an over-drawn hub, a base served
+   * illegally. The hue the row-state tick below shipped as a provisional
+   * stand-in for; this is the ticket that authored it.
+   *
+   * REDDISH PURPLE RATHER THAN RED, and the rejection is the interesting half.
+   * Red is the obvious reading of "over capacity" and it is not available here:
+   * `--node-demand` is vermillion, and red against vermillion is dE 3 under
+   * deuteranopia -- confusable exactly where it matters, since an overloaded
+   * lane is by construction the lane running into a demand node. This is the
+   * eighth Okabe-Ito colour and the only categorical role still unspent.
+   *
+   * Solid, so neither the pitch floor nor the duty cap applies, and wide: 14 is
+   * the lane band already reserved for the knockout casing, so the halo is
+   * provably inside space the layout solve has accounted for. It is painted
+   * UNDER the route, which is what makes a lane that is both read as a route
+   * with a violation around it rather than as one mark hiding the other. */
+  --violation:          #cc79a7;
+  --violation-w:        14;
+  /* The node ring's stroke. Thinner than the lane halo because a ring encloses
+   * rather than covers, and it sits just outside a disc already carrying a
+   * 3-unit white stroke of its own. */
+  --violation-ring-w:   5;
+
   /* The promoted reverse arc was held back from this block with a note saying
    * the ticket that drew it should re-open the question. #42 drew it, and the
    * question closed the other way: **the promotion adds no pattern at all.**
@@ -251,16 +286,19 @@
    * every categorical role on the canvas) rather than the values, which are
    * expected to be retuned against the real projector.
    *
-   * Only `removed` and `hot` echo a canvas colour that exists today. The cut,
-   * the path and the violation have no canvas hue yet -- their layers land
-   * with #42-#44 -- so those three are provisional stand-ins, to be re-derived
-   * from the real hue when the ticket that authors it lands. They are here now
-   * rather than later because the ledger is built once and its states have to
-   * exist from the first paint. */
+   * All five now echo a canvas colour that exists: `removed` and `hot` always
+   * did, #42 authored the cut and the path, and #44 authored the violation and
+   * re-derived its tick below. They were all here from the start rather than
+   * arriving with their marks, because the ledger is built once and its states
+   * have to exist from the first paint -- which is the whole reason two of them
+   * spent a while as stand-ins. */
   --panel-tick-width:   3px;
   --panel-tick-removed:   #444b54;
   --panel-tick-in-cut:    #6b5b47;
-  --panel-tick-violating: #7a4f4f;
+  /* Re-derived from `--violation` now that Day 1 has authored it, which is what
+   * the provisional note above asked the ticket drawing the mark to do. Same
+   * hue, low chroma, so the panel echoes the canvas without spending its role. */
+  --panel-tick-violating: #6b4f60;
   --panel-tick-on-path:   #3f6274;
   --panel-tick-hot:       #aab4c0;
 }
@@ -403,6 +441,22 @@ html, body {
 #headline-delta .delta-label { margin-right: 6px; }
 #headline-delta .delta-arrow { margin: 0 4px; }
 #headline-delta .delta-after { color: var(--panel-ink); font-weight: 600; }
+
+/* The one-sentence note, which is how a degenerate view x dataset combination
+ * says it is flat. Unlike the pair above it does NOT hold its line: a stat's
+ * absence means "not on this view" and is worth a placeholder, where a
+ * sentence's absence means there is nothing to say, and a permanently blank
+ * line under the headline is a gap the eye keeps returning to. It appears on
+ * one combination out of nine, so the reflow it costs is paid nine times a unit
+ * rather than on every beat. */
+#headline-note {
+  margin: 2px 0 0;
+  font-size: var(--panel-type-label);
+  color: var(--panel-muted);
+  font-style: italic;
+}
+
+#headline-note:empty { display: none; }
 
 /* ---- the lane ledger ----------------------------------------------------- */
 /* `table-layout: fixed` is load-bearing, not tidiness. An auto-laid-out table
@@ -551,6 +605,63 @@ html, body {
   margin-left: 4px;
 }
 
+/* ---- the Pareto table ----------------------------------------------------
+ * The fourth panel slot, and the Cost & Risk view's PROMOTED TIMELINE: its rows
+ * carry that view's beat state, which is why the beat timeline above is empty
+ * while Cost & Risk is up. A four-row detent list beside these eight rows would
+ * be the same information twice in two components that can disagree.
+ *
+ * Laid out `fixed` for the reason the ledger is: an auto-laid-out table
+ * re-measures its columns when a cell's text changes, and the frontier's
+ * numbers change with the dataset. */
+#pareto {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: var(--panel-type-row);
+}
+
+#pareto th {
+  font-size: var(--panel-type-label);
+  color: var(--panel-muted);
+  font-weight: 500;
+  text-align: right;
+  padding: 0 3px 3px;
+}
+
+#pareto td {
+  padding: 2px 3px;
+  border-top: 1px solid var(--panel-rule);
+  text-align: right;
+}
+
+#pareto tbody tr { cursor: pointer; }
+
+/* The active detent's CONTIGUOUS BLOCK, marked by the same left-edge tick the
+ * ledger and the timeline use -- and for the same reason, that a fill or a
+ * bolder weight would change a row's metrics and move every row under it. The
+ * whole block is marked rather than one row because the block IS the detent:
+ * every lambda in it returns the same pair of plans. */
+#pareto tbody td:first-child {
+  border-left: var(--panel-tick-width) solid transparent;
+  padding-left: 4px;
+}
+
+#pareto tr.current td:first-child { border-left-color: var(--panel-tick-hot); }
+#pareto tr.current td { color: var(--panel-ink); }
+
+/* A collapsed lambda: same naive plan and same optimum as the row above it, so
+ * it is not a second Pareto point and gets no beats of its own. It stays on
+ * screen and stays legible -- muted, not hidden -- because being able to point
+ * at the duplicates is the entire argument for the dedup. The glyph says which
+ * rows are the repeats without spending a hue on it. */
+#pareto tr.duplicate td { color: var(--panel-muted); }
+
+#pareto tr.duplicate .cell-lambda::after {
+  content: " \2033";
+  margin-left: 2px;
+}
+
 /* ---- the diagram --------------------------------------------------------- */
 /* Stroke widths and type sizes are authored in diagram units and scale with
  * the graph. No `vector-effect: non-scaling-stroke` anywhere: a gutter that
@@ -616,14 +727,62 @@ html, body {
   font-weight: 600;
 }
 
-.node circle {
+/* The node's own disc, named rather than reached as `.node circle`: a node
+ * group carries the disc and Day 1's violation ring, and a selector matching
+ * any circle would paint the ring with the disc's categorical fill. */
+.node .node-disc {
   stroke: var(--node-stroke);
   stroke-width: var(--node-stroke-w);
 }
 
-.node.supply  circle { fill: var(--node-supply); }
-.node.transit circle { fill: var(--node-transit); }
-.node.demand  circle { fill: var(--node-demand); }
+.node.supply  .node-disc { fill: var(--node-supply); }
+.node.transit .node-disc { fill: var(--node-transit); }
+.node.demand  .node-disc { fill: var(--node-demand); }
+
+/* ---- Day 1's node marks --------------------------------------------------
+ * The SECOND violation, and it is on the node because that is what makes it a
+ * second violation rather than a second shade of the first: an over-capacity
+ * lane is a too-small pipe and an over-drawn hub is a bad ASSIGNMENT, and the
+ * room has to be able to see which it is looking at. A ring around a node and a
+ * stroke along a lane are two shapes; two hues on lanes would be one shape.
+ *
+ * The ring is never filled and never replaces the disc: the node's categorical
+ * hue is the one colour the room has been reading since the first screen, and
+ * the violation is something that happened TO this node, not what it is. */
+.naive-mark {
+  fill: none;
+  stroke-width: var(--violation-ring-w);
+}
+
+/* Over-stock hub and illegally-served base wear the ONE violation hue, so
+ * "this is where the plan fails" is one colour on the board. They are told
+ * apart by which end of the theater they are at -- a hub dispatches and a base
+ * receives -- rather than by a second hue nobody has been taught. */
+.node.overdrawn .naive-mark,
+.node.illegal   .naive-mark {
+  stroke: var(--violation);
+}
+
+/* The base nothing reaches is a different lesson, so it is a different mark:
+ * the same grey-and-struck vocabulary a removed lane already wears, because on
+ * screen it is the same fact. Grey reads as ABSENT where the violation hue
+ * reads as alarming -- and unreachability is not the plan misbehaving, it is
+ * the plan having nothing to work with. */
+.node.unreachable .naive-mark,
+.node.unreachable .node-glyph {
+  stroke: var(--removed);
+}
+
+/* The X, scoped to the one state that uses it. No `.off` handling needed: a
+ * glyph that only ever appears for `unreachable` is switched by the state
+ * rather than by a flag the render pass has to keep in step. */
+.node-glyph {
+  display: none;
+  stroke-width: var(--removed-glyph-w);
+  stroke-linecap: round;
+}
+
+.show-naive .node.unreachable .node-glyph { display: inline; }
 
 .node text {
   fill: var(--node-ink);
@@ -710,6 +869,32 @@ html, body {
   display: none;
 }
 
+/* ---- Day 1's two lane marks ----------------------------------------------
+ * The violation is a WIDE UNDERLAY and the route a narrower core on top. On
+ * beat *a* most violating lanes are also route lanes -- the naive convoys are
+ * what overload them -- so the common case has to say both things at once, and
+ * it does: a violation halo around a route. Painted at the same width, or the
+ * other way round, one of the two would simply be gone.
+ *
+ * Both are solid. Neither the pitch floor nor the duty cap applies to a solid
+ * stroke, and the presence floor is cleared by a factor of four at these
+ * weights. */
+.violation {
+  stroke: var(--violation);
+  stroke-width: var(--violation-w);
+  stroke-linecap: round;
+  fill: none;
+  display: none;
+}
+
+.route-mark {
+  stroke: var(--route);
+  stroke-width: var(--route-w);
+  stroke-linecap: round;
+  fill: none;
+  display: none;
+}
+
 /* The promoted reverse arc: the residual arc MOVED, not re-patterned.
  *
  * Same stroke and same dash as the arc it is a promotion of -- reaching for the
@@ -752,9 +937,14 @@ html, body {
 .show-residual .residual-arc.off,
 .show-residual .reverse-arc.off,
 .show-path .path-mark.off,
-.show-cut .cut-mark.off { display: none; }
+.show-cut .cut-mark.off,
+.show-route .route-mark.off,
+.show-naive .violation.off,
+.show-naive .naive-mark.off { display: none; }
 
-.route-mark, .naive-mark, .violation { display: none; }
+/* The node ring's own hiding rule. The two lane marks carry theirs with their
+ * strokes above, where the rest of the marks keep theirs. */
+.naive-mark { display: none; }
 
 /* ---- the scaffold tier ----------------------------------------------------
  * Lanes the active annotation does not touch dim to 30%, so the room's eye goes

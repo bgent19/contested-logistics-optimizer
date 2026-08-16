@@ -71,6 +71,20 @@ export const VIEWS = [
     label: "Cost & Risk",
     hint: "Day 1: why serving each base from its cheapest hub fails",
     layers: ["synth", "costrisk", "flow", "route", "naive"],
+    /* THE BEAT TIMELINE IS EMPTY IN THIS VIEW, AND THAT IS THE DESIGN.
+     *
+     * The Pareto table is promoted to be this view's timeline: its rows carry
+     * the beat state and a click on one jumps to that detent, exactly as a
+     * timeline row does elsewhere. A four-row detent list beside eight lambda
+     * rows would be the same information twice, in two components that can
+     * disagree about which detent is current.
+     *
+     * Accepted cost, stated so it is not later read as a bug: Cost & Risk's
+     * panel is structurally three slots where the others are four, and an
+     * implementer will be tempted to "fix" it by putting the empty list back.
+     * **Do not.** The empty slot is the absence of a duplicate, not a missing
+     * feature. */
+    timeline: false,
   },
   {
     /* Days 2-3, merged: the min cut is a certificate OF the flow just computed,
@@ -92,6 +106,23 @@ export const VIEWS = [
     layers: ["synth", "caps", "flow", "cut", "removed"],
   },
 ];
+
+/**
+ * Whether a view populates the beat timeline slot.
+ *
+ * Declared beside the view's layer set rather than branched on in the page's
+ * repaint, for the same reason the layer sets live here: a view is a named set
+ * of properties, not a code path. Cost & Risk is the one view that says no, and
+ * it says so because its Pareto table already carries the beat state -- see the
+ * note on that view above before "fixing" the empty list.
+ *
+ * Defaults to true for a view that declares nothing, so a view added later owns
+ * the timeline unless it explicitly hands the job to something else.
+ */
+export function showsTimeline(viewId) {
+  const view = VIEWS.find((candidate) => candidate.id === viewId);
+  return !view || view.timeline !== false;
+}
 
 /** The view a key code selects, or `null`. */
 export function viewForKey(code) {

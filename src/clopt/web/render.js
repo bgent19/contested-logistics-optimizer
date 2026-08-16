@@ -20,14 +20,24 @@
  */
 
 import { frozen, geometry, handles, SUPER_SINK, SUPER_SOURCE } from "./graph.js";
-import { edgeChanges, isRemoved, laneStates, ROW_STATES } from "./state.js";
+import { edgeChanges, isRemoved, laneStates, nodeStates, NODE_STATES,
+         ROW_STATES } from "./state.js";
 
 /** The em dash an empty headline slot shows. A slot is never blank: a gap
  *  reads as a number that failed to arrive, where "—" reads as "not on this
  *  view", which is what it means. */
 const EMPTY = "—";
 
-const GLYPH = 13;   /* half-diagonal of the struck-out X, in diagram units */
+const GLYPH = 13;   /* half-diagonal of a lane's struck-out X, in diagram units */
+
+/* The same X over a NODE, and a constant of its own rather than the lane's.
+ *
+ * A lane's X sits on an anchor with nothing behind it, where a node's has to
+ * span a 30-unit disc to read as marking that node rather than as a small
+ * decoration sitting on it. 21 is 0.7 of the node radius: wide enough to cross
+ * the disc, short of the rim, so the white node stroke stays an unbroken circle
+ * and the mark reads as struck THROUGH rather than as a broken outline. */
+const NODE_GLYPH = 21;
 
 /* Type-dependent geometry, in diagram units.
  *
@@ -217,6 +227,12 @@ function renderHeadline(state, certificates) {
   slot("cut", state.cut);
   slot("interdicted", certificates.removed);
   slot("violations", certificates.violating);
+  /* Day 1's second violation count, accumulated in the NODE loop from the very
+   * flags that class the nodes -- the same single-rendering discipline the lane
+   * counts live under. Two counts because there are two failures: a lane over
+   * capacity needs a wider pipe and a hub over stock needs a different
+   * assignment, and one merged number would not say which. */
+  slot("overdrawn", certificates.overdrawn);
   /* Day 4's counts, per track and never per rung: the space's size attached to
    * a greedy result would claim work greedy never did. */
   slot("searched", state.search && state.search.searched);
@@ -246,6 +262,12 @@ function renderHeadline(state, certificates) {
     "live",
     Boolean(pair) && String(pair.before) !== String(pair.after),
   );
+
+  /* The one-sentence note. Empty on almost every beat, which is why it is a
+   * slot that collapses rather than one holding an em dash like the stats
+   * above: a stat's absence means "not on this view" and is worth a place-
+   * holder, where a sentence's absence means there is nothing to say. */
+  handles.note.textContent = state.note || "";
 }
 
 /** Repaint everything from the current state. Idempotent, and cheap enough to
@@ -301,7 +323,7 @@ export function render(state) {
   /* The certificates the headline's numbers are read off. Accumulated inside
    * the lane loop rather than computed beside it, so the count and the marked
    * rows cannot come apart. */
-  const certificates = { removed: 0, violating: 0 };
+  const certificates = { removed: 0, violating: 0, overdrawn: 0 };
 
   for (const [edgeId, bundle] of handles.edges) {
     const a = positions.get(bundle.edge.src);
@@ -419,6 +441,23 @@ export function render(state) {
     place(mark.cutMark, segment);
     mark.cutMark.classList.toggle("off", !states["in-cut"]);
 
+    /* -- Day 1's two lane marks -------------------------------------------- *
+     * Both sit on the lane's own line, the violation wide underneath and the
+     * route narrower on top, so a lane that is both shows a violation halo
+     * around a route rather than one mark hiding the other.
+     *
+     * The route reuses `on-path`, which is not a shortcut: on Day 1 the
+     * highlighted walk IS the superimposed convoy routes, and asking the same
+     * question through a second lane subset would be two answers to "is this
+     * lane on the walk the beat is talking about". What differs is which layer
+     * shows it, and that is a fact about the catalog rather than about the
+     * lane. */
+    place(mark.routeMark, segment);
+    mark.routeMark.classList.toggle("off", !states["on-path"]);
+
+    place(mark.violationMark, segment);
+    mark.violationMark.classList.toggle("off", !states.violating);
+
     /* The direction glyph's other half: a row is marked only where it is BOTH
      * on the path and running against the lane, so a forward traversal stays
      * unmarked. One lane, one row, one numeral, one glyph -- the glyph itself
@@ -478,8 +517,6 @@ export function render(state) {
     row(label.costrisk, null, anchor, ROW_OFFSET, statText);
   }
 
-  renderHeadline(state, certificates);
-
   /* -- nodes --------------------------------------------------------------- */
   for (const [nodeId, bundle] of handles.nodes) {
     const point = positions.get(nodeId);
@@ -491,7 +528,54 @@ export function render(state) {
     bundle.quantity.setAttribute("y", point.y + 6);
     shade(bundle.shade, point, state.sourceSide,
           (sides) => sides.has(nodeId));
+
+    /* One call, two consumers -- the node's classes and the headline's `Over
+     * stock` count -- exactly as `laneStates` serves the row classes and the
+     * lane counts. A count that disagreed with the nodes certifying it would
+     * have to disagree with itself. */
+    const flags = nodeStates(state, nodeId);
+    if (flags.overdrawn) certificates.overdrawn += 1;
+    for (const name of NODE_STATES) {
+      bundle.group.classList.toggle(name, flags[name]);
+    }
+
+    /* The ring is up whenever the plan says something about this node, and the
+     * X only for the base nothing reaches. Which of the two a state gets is the
+     * stylesheet's business; whether it has anything to say is this pass's. */
+    const flagged = NODE_STATES.some((name) => flags[name]);
+    bundle.flag.setAttribute("cx", point.x);
+    bundle.flag.setAttribute("cy", point.y);
+    bundle.flag.classList.toggle("off", !flagged);
+    place(bundle.flagGlyphs[0], {
+      x1: point.x - NODE_GLYPH, y1: point.y - NODE_GLYPH,
+      x2: point.x + NODE_GLYPH, y2: point.y + NODE_GLYPH,
+    });
+    place(bundle.flagGlyphs[1], {
+      x1: point.x - NODE_GLYPH, y1: point.y + NODE_GLYPH,
+      x2: point.x + NODE_GLYPH, y2: point.y - NODE_GLYPH,
+    });
+
+    /* The supply hub's readout: what the plan asked of it against what it
+     * holds. Composed here from the pair on the state, the same split the two
+     * tracks live under -- the state holds the numbers the server gave and the
+     * render pass decides how to write them, so the format lives in one place.
+     *
+     * EVERY supply node carries it, idle healthy ones included: an overdrawn
+     * hub beside a hub with spare stock makes the allocation argument by
+     * itself, and a readout only on the sick hub would leave the room looking
+     * at a lane problem with nothing to compare it against.
+     *
+     * A beat that knows no allocation for this node -- which is every beat of
+     * the other two views -- shows the authored quantity instead. Both spellings
+     * live here rather than one here and one in the build pass: a cell two
+     * modules write is a cell whose value depends on which ran last. */
+    const asked = state.dispatch.get(nodeId);
+    bundle.quantity.textContent = asked
+      ? `${asked.dispatched}/${asked.stock}`
+      : (bundle.node.quantity ? String(bundle.node.quantity) : "");
   }
+
+  renderHeadline(state, certificates);
 
   /* The terminals take their side by definition rather than from the payload:
    * `source_side` lists the real nodes the source can still reach, and the two
@@ -508,6 +592,23 @@ export function render(state) {
   /* -- the beat timeline ---------------------------------------------------- */
   handles.timeline.forEach((row, index) => {
     row.classList.toggle("current", index === state.beat);
+  });
+
+  /* -- the Pareto table's beat state ---------------------------------------- *
+   * The Cost & Risk view's promoted timeline. The ACTIVE DETENT'S CONTIGUOUS
+   * BLOCK is marked rather than one row, because the block is what the detent
+   * is: every lambda in it returns the same pair of plans, so marking only the
+   * first would say the others belong to some other point on the frontier.
+   *
+   * Marked from `state.detent` rather than from the beat index, so the table
+   * and the beat cannot disagree -- and `null` outside this view leaves the
+   * whole table unmarked, which is right: the frontier is still a fact about
+   * the dataset, but no beat is standing anywhere on it. */
+  handles.pareto.forEach((row) => {
+    row.classList.toggle(
+      "current",
+      state.detent !== null && row.dataset.unit === String(state.detent),
+    );
   });
 }
 

@@ -86,6 +86,13 @@
       <div id="headline">
         <div id="headline-stats"></div>
         <p id="headline-delta"></p>
+        <!--
+          One sentence, and the slot a degenerate view x dataset combination
+          speaks through. A combination is LABELLED, not struck: striking one
+          would be view-aware behaviour, which is the hidden modality the key
+          assignments were designed to avoid.
+        -->
+        <p id="headline-note"></p>
       </div>
 
       <h2>Dataset</h2>
@@ -113,6 +120,27 @@
         keyboard cannot.
       -->
       <ol id="timeline"></ol>
+
+      <h2>Frontier</h2>
+      <!--
+        The Pareto table: one row per lambda, always, all eight of them.
+
+        It is the Cost & Risk view's PROMOTED TIMELINE -- its rows carry that
+        view's beat state and a click on one jumps to that detent, which is why
+        the beat timeline above is empty while Cost & Risk is up. Keeping all
+        eight rows with the collapsed ones marked is what lets the instructor
+        say "the frontier has four points, not eight; lambda is a dial with
+        detents" and then point at the duplicates.
+
+        A fixed slot like the rest of the panel: it is built per dataset because
+        the frontier is a property of the dataset, and the other two views
+        simply leave it unmarked rather than emptying it.
+      -->
+      <table id="pareto">
+        <colgroup id="pareto-cols"></colgroup>
+        <thead id="pareto-head"></thead>
+        <tbody id="pareto-rows"></tbody>
+      </table>
 
       <h2>Lanes</h2>
       <!--
@@ -145,15 +173,30 @@
   -->
   <script type="module">
     import { fetchDatasets, fetchScenario, fetchMaxflow,
-             fetchLadder } from "./api.js";
+             fetchLadder, fetchSweep, fetchNaive } from "./api.js";
     import { state, setScenario, setDataset, setView, toggleLayer, pinLane,
              stepBeat, stepUnit, jumpToUnit, resetView, setBeat, setSpine,
-             flowCutSpine, interdictionSpine, spine, resolveBeat } from "./state.js";
-    import { buildGraph, buildTimeline, laneForArc } from "./graph.js";
+             flowCutSpine, interdictionSpine, costRiskSpine, paretoRows,
+             spine, resolveBeat } from "./state.js";
+    import { buildGraph, buildTimeline, buildPareto, laneForArc } from "./graph.js";
     import { render } from "./render.js";
-    import { VIEWS, LAYERS, applyLayerClasses, viewForKey } from "./views.js";
+    import { VIEWS, LAYERS, applyLayerClasses, viewForKey,
+             showsTimeline } from "./views.js";
 
     const svg = document.getElementById("theater");
+
+    // The rows a slot shows for a view that does not own it, as ONE array
+    // rather than a fresh `[]` each pass. The identity checks below are what
+    // keep a repaint from rebuilding rows the pointer may be over, and a new
+    // empty array every time would defeat them.
+    const NO_ROWS = [];
+
+    // This dataset's frontier, as `paretoRows` tagged it. Held here so the
+    // Pareto table can be built PER VIEW like the beat timeline while being
+    // computed once per dataset like the ledger -- the frontier is a fact about
+    // the dataset, but the rows are only on screen in the view whose beat state
+    // they carry.
+    let frontier = NO_ROWS;
 
     // The spine whose rows are currently in the timeline. Compared by identity
     // rather than by length: a spine array is replaced wholesale when one is
@@ -161,14 +204,32 @@
     // identity is exactly the question "are these the rows on screen?".
     let drawnSpine = null;
 
+    // The same identity guard for the Pareto table's rows.
+    let drawnPareto = null;
+
     function repaint() {
       // Rebuilt only when the spine itself changed, so stepping through a beat
       // is class writes on rows that already exist. Rebuilding every keypress
       // would work and would throw away the row the pointer is over.
-      const active = spine();
+      // Whether this view owns the beat timeline is a property of the view,
+      // read from the catalog rather than branched on by id here. Cost & Risk
+      // says no because its Pareto table already carries the beat state --
+      // see the note on that view in views.js before "fixing" the empty slot.
+      const active = showsTimeline(state.view) ? spine() : NO_ROWS;
       if (active !== drawnSpine) {
         buildTimeline(active);
         drawnSpine = active;
+      }
+      // The other half of the same swap: the two slots are never both filled,
+      // because they carry the same thing -- this view's beat state -- and the
+      // whole reason the timeline is empty in Cost & Risk is that the Pareto
+      // table is saying it instead. An inert copy of the frontier left standing
+      // in Flow & Cut would be a table the pointer cannot use, under a heading
+      // claiming otherwise.
+      const rows = showsTimeline(state.view) ? NO_ROWS : frontier;
+      if (rows !== drawnPareto) {
+        buildPareto(rows);
+        drawnPareto = rows;
       }
       applyLayerClasses(document.documentElement, state.layers);
       render(state);
@@ -230,6 +291,34 @@
         const row = event.target.closest("li[data-beat]");
         if (!row) return;
         setBeat(Number(row.dataset.beat));
+        repaint();
+      });
+    }
+
+    /* The Pareto table's rows, delegated exactly as the timeline's are, and for
+     * the same reason: the rows are rebuilt per dataset, and a per-row listener
+     * would have to be attached from the build pass.
+     *
+     * This table IS the Cost & Risk view's timeline, so a row click is a jump
+     * to that detent -- the same pointer action a timeline row performs, and
+     * one that reaches no state the keyboard cannot. A collapsed lambda's row
+     * lands on the detent it belongs to, which is the honest answer: the row is
+     * on screen so it can be pointed at, and pointing at it should show the
+     * plan it shares. */
+    function bindPareto() {
+      document.getElementById("pareto-rows").addEventListener("click", (event) => {
+        const row = event.target.closest("tr[data-unit]");
+        if (!row) return;
+        // Only while this table IS the current view's timeline. The frontier is
+        // a fact about the dataset, so the table stays populated in all three
+        // views -- but a click in Flow & Cut would otherwise index THAT view's
+        // spine and silently jump the augmentation ladder to wherever detent
+        // four happens to land. No keypress in Flow & Cut means "detent 4 of
+        // Day 1", and a pointer may never reach what the keyboard cannot.
+        if (showsTimeline(state.view)) return;
+        // By ORDINAL, through the same mutator the digit keys use, so the row
+        // and the digit cannot disagree about which beat a detent starts at.
+        jumpToUnit(Number(row.dataset.unit));
         repaint();
       });
     }
@@ -330,9 +419,17 @@
       // ladder is one request per dataset for the same reason the trace is:
       // Day 4 is walked up and back down at the front of the room, and the
       // alternative is the 2 x K requests a per-rung frontend would issue.
-      const [maxflow, ladder] = await Promise.all([
+      //
+      // Day 1's two arrays go in the same batch. They are a matched pair --
+      // same lambda list, same order -- so the A/B flip between the naive plan
+      // and the optimum is a swap at one index, and BOTH sides are in hand
+      // before the dial can be turned. Fetching them per detent would put a
+      // request between the instructor and the next keypress eight times over.
+      const [maxflow, ladder, sweep, naive] = await Promise.all([
         fetchMaxflow(datasetId, state.threat),
         fetchLadder(datasetId, state.threat),
+        fetchSweep(datasetId, state.threat),
+        fetchNaive(datasetId, state.threat),
       ]);
       // The lane lookup is handed in rather than imported by state.js, which
       // keeps the module that owns app state free of the one that owns
@@ -342,6 +439,19 @@
       // own wreckage: the ladder says which lanes the adversary takes and
       // `/maxflow` says which lanes certify the cut it is working against.
       setSpine("interdiction", interdictionSpine(ladder, maxflow, laneForArc));
+      // The pristine network goes in because the spine has exactly one question
+      // for it: whether this dataset carries any risk at all. On the textbook
+      // set it does not, and the headline says so rather than the combination
+      // being struck -- a degenerate combination is labelled.
+      setSpine("cost-risk",
+               costRiskSpine(sweep, naive, laneForArc, payload.network));
+      // The panel's rows come from the SAME `paretoRows` the spine was built
+      // from -- one pure function, called for each, so the eight rows the panel
+      // shows and the detents the keyboard walks cannot disagree about which
+      // block a lambda belongs to. The rows go on screen in `repaint`, which is
+      // where the view decides whether this slot or the beat timeline is the
+      // one carrying its beat state.
+      frontier = paretoRows(sweep, naive);
 
       // The beat is re-resolved against the new dataset rather than reset: the
       // marks were cleared with the old theater's edge ids, and the current
@@ -364,6 +474,7 @@
       buildControls();
       bindLedger();
       bindTimeline();
+      bindPareto();
       setView(VIEWS[0].id);
 
       // An empty menu means the server loaded no dataset at all, which it

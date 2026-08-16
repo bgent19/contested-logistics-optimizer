@@ -33,6 +33,11 @@ const LANE_GAP = 6;        /* air between a lane's end and the node it meets */
  * the node's own categorical hue is competing with. */
 const SHADE_R = 48;
 
+/* Air between a node's disc and the violation ring drawn around it. Small
+ * enough that the ring reads as belonging to the node rather than floating
+ * near it, and clear of the disc's own 3-unit stroke. */
+const FLAG_GAP = 7;
+
 /* The derived terminals sit outside the authored coordinate range, pinned at
  * the horizontal extremes, so a min cut later reads as the S-T partition it is
  * defined to be.
@@ -85,6 +90,19 @@ const HEADLINE_SLOTS = [
    * would have to resolve out loud. */
   { id: "interdicted", label: "Struck" },
   { id: "violations",  label: "Over cap" },
+  /* Day 1's second violation, and it is a SECOND SLOT rather than a bigger
+   * first one. An over-capacity lane and an over-stock hub are different
+   * failures with different fixes -- a wider pipe against a different
+   * assignment -- and one merged count would be a number the room cannot act
+   * on. `Over stock` counts hubs where `Over cap` counts lanes. */
+  { id: "overdrawn",   label: "Over stock" },
+  /* There is deliberately NO slot for unreachable demand. It is a third kind of
+   * failure and it does have a certificate -- the struck-out demand node -- but
+   * the headline is a fixed grid shared by all three views, so every slot added
+   * here costs space on days that will never fill it. The two counts above earn
+   * that cost by moving as the story does; unreachability is a fact about the
+   * network's shape, it does not move, and the mark on the node says it where
+   * the room is already looking. */
   /* Day 4's two search counts, labelled rather than positional. The number
    * beside a greedy result must not be read as a claim about work greedy did,
    * and `searched` + `skipped` is the whole space said in the two halves that
@@ -123,6 +141,26 @@ const LEDGER_COLUMNS = [
   { key: "flow", head: "Flow", numeric: true },
 ];
 
+/* The Pareto table's columns -- the promoted timeline of the Cost & Risk view.
+ *
+ * Both sides of the pair are columns, and that is what makes the dedup legible:
+ * a block collapses only when NEITHER the naive plan nor the optimum moved, so
+ * a reader has to be able to see both halves standing still. This is a per-
+ * LAMBDA comparison and not a per-lane one -- the A/B delta remains the single
+ * headline pair, and no lane anywhere gains a before/after column.
+ *
+ * `digits` is how many decimals the cell is written to. Fill rate is a fraction
+ * and the rest are theater quantities, so they do not share a format. */
+const PARETO_COLUMNS = [
+  { key: "lambda",   head: "λ",      digits: 0 },
+  { key: "fill",     head: "Fill",   digits: 2 },
+  { key: "cost",     head: "Cost",   digits: 0 },
+  { key: "risk",     head: "Risk",   digits: 2 },
+  /* The naive plan's price, beside the optimum's, on every row. The punchline
+   * of Day 1 is that this column undercuts the one two places left of it. */
+  { key: "notional", head: "Naive",  digits: 0 },
+];
+
 /** The handle map, `{edgeId: bundle}` and `{nodeId: bundle}`. See `buildGraph`. */
 export const handles = {
   nodes: new Map(),
@@ -132,8 +170,12 @@ export const handles = {
   headline: new Map(),
   /** The A/B pair's three cells, `{root, label, before, after}`. */
   delta: null,
+  /** The headline's one-sentence note. See `buildHeadline`. */
+  note: null,
   /** The beat timeline's rows, in spine order. See `buildTimeline`. */
   timeline: [],
+  /** The Pareto table's rows, in lambda order. See `buildPareto`. */
+  pareto: [],
 };
 
 /** The frozen solves, filled by `buildGraph` and read by `render.js`. */
@@ -512,6 +554,16 @@ function buildHeadline() {
   const after = el("span", "delta-after");
   for (const part of [label, before, arrow, after]) root.appendChild(part);
   handles.delta = { root, label, before, after };
+
+  /* The one-sentence note, and a slot of its own rather than a borrowed one.
+   *
+   * It is what a degenerate view x dataset combination speaks through -- the
+   * combination is LABELLED, not struck. Writing it into the A/B label instead
+   * would put a sentence where the page promises two numbers that differ, which
+   * is a claim about a comparison nobody made. */
+  const note = document.getElementById("headline-note");
+  clearChildren(note);
+  handles.note = note;
 }
 
 /**
@@ -650,18 +702,45 @@ export function buildGraph(svg, payload) {
 
   for (const node of network.nodes) {
     const group = element("g", { class: `node ${node.kind}`, "data-node": node.id });
-    const circle = element("circle", { r: NODE_R });
+    /* Classed rather than left bare: a node group carries three circles now --
+     * the disc, and Day 1's violation ring -- so `.node circle` would reach the
+     * ring with the disc's own categorical fill and paint it solid. */
+    const circle = element("circle", { class: "node-disc", r: NODE_R });
     const id = element("text", { class: "node-id" });
     const quantity = element("text", { class: "node-quantity" });
     id.textContent = node.id;
-    quantity.textContent = node.quantity ? String(node.quantity) : "";
+    /* The quantity cell is left EMPTY here and written only by the render pass.
+     * It used to be a build-time identity cell like the node's id, and stopped
+     * being one when Day 1 gave it a second thing to say -- a hub's dispatched
+     * total against its stock. A cell two modules both write is a cell whose
+     * value depends on which of them ran last. */
     group.appendChild(circle);
     group.appendChild(id);
     group.appendChild(quantity);
+
+    /* Day 1's node marks. Every node gets all three from the first paint,
+     * `display: none` until a layer switches them on and a state gives them
+     * something to say -- building them per-beat would be an append from the
+     * render pass.
+     *
+     * A RING and a GLYPH rather than two hues, because the two demand-node
+     * failures are different lessons: a base served illegally is part of a plan
+     * that cheats, and a base nothing reaches is not in the plan at all. The
+     * second wears the same struck-out X a removed lane wears, because on
+     * screen it is the same fact -- nothing gets here -- and a second
+     * vocabulary would spend a channel to say it twice. */
+    const flag = element("circle", { class: "naive-mark", r: NODE_R + FLAG_GAP });
+    const flagOne = element("line", { class: "node-glyph" });
+    const flagTwo = element("line", { class: "node-glyph" });
+    for (const part of [flag, flagOne, flagTwo]) group.appendChild(part);
+
     tiers.nodes.appendChild(group);
     const shade = element("circle", { class: "cut-shade", r: SHADE_R });
     shades.appendChild(shade);
-    handles.nodes.set(node.id, { node, group, circle, id, quantity, shade });
+    handles.nodes.set(node.id, {
+      node, group, circle, id, quantity, shade,
+      flag, flagGlyphs: [flagOne, flagTwo],
+    });
   }
 
   /* -- annotation tier ------------------------------------------------------
@@ -705,11 +784,31 @@ export function buildGraph(svg, payload) {
      * replace-never-add rule is enforced in one place. */
     const reverseArc = element("line", { class: "reverse-arc" });
     const pathMark = element("line", { class: "path-mark" });
-    for (const part of [cutMark, residualAlong, residualCounter, reverseArc,
-                        pathMark]) {
+    /* The naive plan's superimposed convoy routes, and the lanes they
+     * over-subscribe. Two marks rather than one because the layer catalog
+     * switches them independently: `route` is the walk and `naive` is the
+     * counterexample's failure, and a lane can carry either without the other. */
+    const routeMark = element("line", { class: "route-mark" });
+    const violationMark = element("line", { class: "violation" });
+    /* Day 1's two lane marks, and the paint order between them is the design.
+     *
+     * The violation is a WIDE UNDERLAY and the route a narrower core on top, so
+     * a lane that is both -- which is the common case on beat *a*, since the
+     * naive convoys are what overload the lanes -- shows a violation halo
+     * around a route. Painted the other way round the route would swallow the
+     * violation whole and the loudest claim on Day 1's screen would be the one
+     * that vanished.
+     *
+     * The violation goes down first of all, under the Flow & Cut marks too: it
+     * is the widest stroke on the board and anything it covered would be gone. */
+    for (const part of [violationMark, cutMark, residualAlong, residualCounter,
+                        reverseArc, routeMark, pathMark]) {
       marks.appendChild(part);
     }
-    bundle.marks = { cutMark, residualAlong, residualCounter, reverseArc, pathMark };
+    bundle.marks = {
+      cutMark, residualAlong, residualCounter, reverseArc, pathMark,
+      violationMark, routeMark,
+    };
   }
 
   for (const link of frozen.terminalLinks) {
@@ -791,6 +890,80 @@ export function buildTimeline(beats) {
     handles.timeline.push(row);
   });
   return handles.timeline;
+}
+
+/**
+ * Emit the Pareto table's rows -- the Cost & Risk view's promoted timeline.
+ *
+ * The fourth panel slot, built per dataset like the ledger rather than per
+ * spine install like the beat timeline: the frontier is a property of the
+ * dataset and the threat picture, and both of those rebuild the page's data
+ * anyway.
+ *
+ * **ALL EIGHT LAMBDA ROWS, WITH THE DUPLICATES MARKED AS DUPLICATES.** The
+ * dedup only pays for itself as a sentence -- "the frontier has four points,
+ * not eight; lambda is a dial with detents" -- if the collapsed rows are still
+ * on screen to be pointed at. A four-row detent list would make the claim
+ * unprovable from the panel, and a four-row list *beside* eight rows would be
+ * the same information twice in two components that can disagree.
+ *
+ * Each row carries two facts and both come off the one `paretoRows` call: the
+ * beat it jumps to, which is the click target, and the detent it belongs to,
+ * which is what the active contiguous block is marked from. One row, both
+ * facts, so the marked block and the beat on screen cannot come apart.
+ *
+ * Clicking a row jumps to that detent -- a pointer action duplicating a
+ * keyboard one and reaching nothing the keyboard cannot. The listener is
+ * delegated by the page; this only writes the index the page reads back.
+ */
+export function buildPareto(rows) {
+  const head = document.getElementById("pareto-head");
+  const body = document.getElementById("pareto-rows");
+  const cols = document.getElementById("pareto-cols");
+  clearChildren(head);
+  clearChildren(body);
+  clearChildren(cols);
+  handles.pareto = [];
+
+  const headRow = document.createElement("tr");
+  for (const column of PARETO_COLUMNS) {
+    const col = document.createElement("col");
+    col.className = `col-${column.key}`;
+    cols.appendChild(col);
+    const cell = document.createElement("th");
+    cell.className = "num";
+    cell.textContent = column.head;
+    headRow.appendChild(cell);
+  }
+  head.appendChild(headRow);
+
+  /* The row carries its DETENT and never a beat index.
+   *
+   * A beat index here would be this module working out where in the spine a
+   * detent starts -- "two beats per detent, beat *a* first" -- which is the
+   * beat engine's knowledge sitting in the DOM builder, and wrong the day the
+   * spine gains a third beat, with every click landing somewhere nobody asked
+   * for and nothing raised. The detent is an ordinal, and `jumpToUnit` already
+   * turns an ordinal into that unit's beat *a* by searching the live spine.
+   * That is also exactly what a digit key does, which is what keeps the click a
+   * duplicate of a keyboard jump rather than a second way in. */
+  rows.forEach((row) => {
+    const line = document.createElement("tr");
+    line.dataset.unit = String(row.detent);
+    /* A collapsed lambda: same plan on both sides as the row above it. Marked
+     * rather than dropped, because being able to point at it is the whole
+     * argument for the dedup. */
+    line.classList.toggle("duplicate", !row.first);
+    for (const column of PARETO_COLUMNS) {
+      const cell = document.createElement("td");
+      cell.className = `num cell-${column.key}`;
+      cell.textContent = row[column.key].toFixed(column.digits);
+      line.appendChild(cell);
+    }
+    body.appendChild(line);
+    handles.pareto.push(line);
+  });
+  return handles.pareto;
 }
 
 /** Geometry the render pass needs and must not recompute differently. */
