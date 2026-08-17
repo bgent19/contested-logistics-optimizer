@@ -464,6 +464,7 @@ KEYS = [
     "ArrowUp", "ArrowDown",         # one coarse unit, landing on beat a
     "KeyZ", "KeyX", "KeyC",         # the three views, in day order
     "KeyR",                         # full view reset
+    "KeyD", "KeyT",                 # the two cycling axes (issue #45)
 ]
 
 # The beat engine's mutators. `state.js` owns them because the beat index is app
@@ -1768,3 +1769,369 @@ def test_day_one_authors_the_violation_hue_the_token_block_was_waiting_for(
         assert rule and "--violation" in rule.group(1), (
             f"`{selector}` does not paint with `--violation`"
         )
+
+
+# ---- dataset and threat-picture cycling (issue #45) -------------------------
+# `D` and `T`, the two axes that move WITHOUT leaving the beat the instructor is
+# on. What is checked here is what a laptop cannot show: that neither cycle
+# resets the story, that the picture's numbers are still the server's, and that
+# a key with nothing to do says so rather than looking broken.
+
+# The two cycling mutators. They live in `state.js` for the reason every other
+# beat mutator does: the dataset, the threat picture and the beat index are all
+# app state, and the keyboard driver in `index.html` may only call them.
+CYCLE_MUTATORS = ["cycleThreat", "nextDataset", "stashThreat", "restoreThreat"]
+
+# The labelled no-op, asserted verbatim like the degenerate note above. A key
+# that silently does nothing is a key that looks broken, and an implementer who
+# reworded this to something vaguer -- or dropped it for a silent `return` --
+# would be turning a labelled no-op back into a mute one.
+NO_PICTURES_NOTE = "no threat pictures in this dataset"
+
+# The five disruption kinds the server applies. Their names appearing in the
+# frontend's code would mean it had started branching on HOW a lane was
+# disrupted, which is one step from computing the result itself.
+DISRUPTION_KINDS = ["remove_edge", "remove_node", "scale_capacity",
+                    "scale_risk", "set_capacity"]
+
+
+def test_both_cycling_keys_are_bound_and_neither_reaches_a_layer(assets):
+    """`D` and `T` join the action table rather than growing a second one.
+
+    The pointer-only rule for layers is only checkable because the keyboard's
+    whole action set is one readable block; two tables would be one the test
+    reads and one it does not.
+    """
+    page = COMMENT.sub(" ", assets["index.html"])
+    table = re.search(r"const KEY_ACTIONS = \{(.*?)\n    \};", page, re.DOTALL)
+    assert table, "index.html no longer has one readable KEY_ACTIONS table"
+    for key in ("KeyD", "KeyT"):
+        assert key in table.group(1), (
+            f"KEY_ACTIONS binds no {key}. The dataset and threat cycles are "
+            f"mid-narration controls, so they belong on the keyboard beside the "
+            f"beat and view keys rather than in the pointer-only tier."
+        )
+
+
+def test_the_cycles_live_in_state_js(assets):
+    """The dataset and the threat picture are app state, like the beat index."""
+    code = COMMENT.sub(" ", assets["state.js"])
+    for mutator in CYCLE_MUTATORS:
+        assert f"export function {mutator}" in code, (
+            f"state.js exports no {mutator}. `D` and `T` move app state, and "
+            f"every mutation of app state belongs to the module that owns it."
+        )
+
+
+def test_neither_cycle_resets_the_beat_index(assets):
+    """Parking on a detent and cycling the threat is the POINT of these keys.
+
+    Both ladders are data-derived, so their length moves under the instructor
+    whenever the dataset or the picture does -- which is why carrying the index
+    across is a clamp (`setSpine` already does it) rather than an assignment
+    either of these functions is allowed to make.
+    """
+    code = COMMENT.sub(" ", assets["state.js"])
+    for mutator in CYCLE_MUTATORS:
+        body = re.search(rf"export function {mutator}\b.*?\n\}}", code, re.DOTALL)
+        assert body, f"`{mutator}` is not a single readable function"
+        assert not re.search(r"\.beat\s*=", body.group(0)), (
+            f"`{mutator}` assigns the beat index. The beat is carried across "
+            f"both cycles and clamped to the target's ladder, which is what "
+            f"`setSpine` does -- an assignment here would restart the story on "
+            f"the key whose whole purpose is not to."
+        )
+    # And the clamp is the one that already exists, rather than a second one.
+    install = re.search(r"export function setSpine\b.*?\n\}", code, re.DOTALL)
+    assert install and "clampToSpine" in install.group(0), (
+        "`setSpine` no longer clamps the beat index, so re-installing a spine "
+        "-- which is what both cycles do -- would leave the index pointing past "
+        "the end of the new ladder"
+    )
+
+
+def test_the_threat_picture_is_per_dataset_state(assets):
+    """The Day 2 excursion comes home to the picture it left.
+
+    Cleared on the way to a dataset with none and restored on the way back, so
+    `D` carries what the target can express and drops what it cannot -- and
+    remembers the drop rather than making the instructor re-select it.
+    """
+    code = COMMENT.sub(" ", assets["state.js"])
+    assert "threatByDataset" in code, (
+        "state.js keeps no per-dataset threat memory, so `D` either loses the "
+        "picture permanently or carries a picture name into a dataset that has "
+        "never heard of it"
+    )
+    restore = re.search(r"export function restoreThreat\b.*?\n\}", code, re.DOTALL)
+    assert restore, "`restoreThreat` is not a single readable function"
+    # The remembered name is CHECKED against the target's own pictures. An
+    # unchecked restore would set `state.threat` to a name the new dataset does
+    # not declare, and every lookup into `threat_pictures` would come back
+    # undefined -- a pristine network the panel claims is under threat.
+    assert "threatNames" in restore.group(0), (
+        "`restoreThreat` does not check the remembered picture against the "
+        "target dataset's own list, so a name from the theater could survive "
+        "into the textbook set"
+    )
+
+
+def test_t_is_a_labelled_no_op_where_there_are_no_threat_pictures(assets):
+    """A key that silently does nothing is a key that looks broken.
+
+    Two of the three shipped datasets declare no threat picture at all, so this
+    is the common case rather than a defensive branch -- and the instructor
+    finds out by pressing it, in front of a room.
+    """
+    code = " ".join(COMMENT.sub(" ", assets[name])
+                    for name in ("state.js", "render.js", "index.html"))
+    assert NO_PICTURES_NOTE in code, (
+        f"nothing states {NO_PICTURES_NOTE!r}. `T` on the textbook set has "
+        f"nothing to cycle, and a key that declines in silence is "
+        f"indistinguishable from one that is broken."
+    )
+    state = COMMENT.sub(" ", assets["state.js"])
+    cycle = re.search(r"export function cycleThreat\b.*?\n\}", state, re.DOTALL)
+    assert cycle, "`cycleThreat` is not a single readable function"
+    # The label is state the render pass reads, not a branch in the render pass:
+    # whether `T` had anything to do is a fact about the keypress.
+    assert "threatNoOp" in cycle.group(0), (
+        "`cycleThreat` records nothing when it declines, so the render pass "
+        "has no way to say the key was pressed and had nothing to cycle"
+    )
+    # And it is transient. A label that outlived the keypress would still be on
+    # screen three beats later, claiming the current picture is absent.
+    resolve = re.search(r"export function resolveBeat\b.*?\n\}", state, re.DOTALL)
+    assert resolve and "threatNoOp" in resolve.group(0), (
+        "the no-op label is not cleared by `resolveBeat`, so it would outlive "
+        "the keypress that produced it and sit under a later beat"
+    )
+
+
+def test_the_threat_cycle_returns_to_baseline(assets):
+    """baseline -> each declared picture -> baseline, and it must come home.
+
+    The pristine network is where the comparison is made from, so a cycle that
+    only walked the pictures would strand the instructor inside the theater with
+    no keystroke back to the untouched case they started from.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    cycle = re.search(r"export function cycleThreat\b.*?\n\}", state, re.DOTALL)
+    body = cycle.group(0)
+    assert "null" in body, (
+        "`cycleThreat` never returns to `null`, which is the pristine network. "
+        "The cycle is baseline -> each picture -> baseline; without the last "
+        "step there is no key back to the untouched theater."
+    )
+
+
+def test_every_threat_picture_is_prefetched_before_the_first_keypress(assets):
+    """`T` is a keypress, and a keypress never awaits a fetch.
+
+    The standing rule of the whole application: ANYTHING A KEYPRESS CAN REACH IS
+    FETCHED BEFORE THE FIRST KEYPRESS. A `T` that fetched would be a request
+    that can fail while the room watches, and the spine it installs would arrive
+    after the key that asked for it.
+    """
+    page = COMMENT.sub(" ", assets["index.html"])
+    assert "threatNames" in page, (
+        "index.html never enumerates the dataset's threat pictures, so `T` "
+        "would have to fetch on the keypress that reaches it"
+    )
+    assert page.index("threatNames") < page.index("bindKeys()"), (
+        "the threat pictures are enumerated after the keyboard goes live, so "
+        "the first `T` could land on payloads that have not arrived"
+    )
+
+
+def test_t_performs_no_structural_dom_change(assets):
+    """Only a `D` switch rebuilds the topology pass.
+
+    The DOM is built once per dataset, so a threat picture may only ever change
+    classes and text on elements that already exist. A `T` that rebuilt the
+    graph would throw away every handle the render pass reaches lanes through --
+    and the two would only disagree once some state was set, which is to say in
+    front of a room.
+    """
+    page = COMMENT.sub(" ", assets["index.html"])
+    applied = re.search(r"function applyThreat\(\)\s*\{(.*?)\n    \}", page,
+                        re.DOTALL)
+    assert applied, (
+        "index.html has no `applyThreat()`. Switching pictures is installing "
+        "the spines built from that picture's payloads -- one function, so the "
+        "`T` key and the dataset load cannot do it differently."
+    )
+    for structural in ("buildGraph", "fetch"):
+        assert structural not in applied.group(1), (
+            f"`applyThreat` reaches {structural}. A threat picture changes "
+            f"classes and text on elements that already exist; the topology "
+            f"pass runs once per dataset and never for a picture."
+        )
+    # `D` is the one that does rebuild, and it goes through the same loader the
+    # first paint uses rather than a second path that can drift from it.
+    cycle = re.search(r"async function cycleDataset\(\)\s*\{(.*?)\n    \}", page,
+                      re.DOTALL)
+    assert cycle, "index.html has no `cycleDataset()`"
+    assert "switchDataset" in cycle.group(1), (
+        "`cycleDataset` does not go through `switchDataset`, which is the one "
+        "route a dataset switch takes -- the menu uses it too, and a second "
+        "spelling is one that can forget the stash the key remembers"
+    )
+    switch = re.search(r"async function switchDataset\(\w*\)\s*\{(.*?)\n    \}",
+                       page, re.DOTALL)
+    assert switch, "index.html has no `switchDataset()`"
+    assert "load(" in switch.group(1), (
+        "the dataset switch does not go through `load`, so `D` would be a "
+        "second build path beside the one the first paint uses"
+    )
+    assert "stashThreat" in switch.group(1), (
+        "the dataset switch does not stash the picture before leaving, so the "
+        "Day 2 excursion could not come home to the picture it left"
+    )
+    # `D` is designed to be pressed twice in quick succession -- that is how the
+    # instructor comes home at two datasets -- and `load` is a long await that
+    # rebuilds the diagram and replaces the payload store. Two interleaved would
+    # build one dataset's DOM against another's payloads.
+    assert "switching" in switch.group(1), (
+        "`switchDataset` is unguarded against re-entry. Leaning on `D` would "
+        "interleave two loads over one payload store and one topology pass."
+    )
+    # The topology pass has exactly ONE caller, and it is the dataset load. This
+    # is the assertion that actually pins the rule -- reading `applyThreat`'s
+    # body alone could not see a rebuild reached some other way.
+    assert len(re.findall(r"\bbuildGraph\(", page)) == 1, (
+        "the topology pass is reached from more than one place in index.html. "
+        "The diagram is built once per dataset, by the loader, and a second "
+        "caller is a second answer to when the handles are valid."
+    )
+
+
+def test_no_disruption_arithmetic_reaches_the_frontend(assets):
+    """Every disrupted number comes off the server's `changes` block.
+
+    The alternative is reimplementing five disruption kinds in JavaScript --
+    including remove-node's zero-every-incident-edge semantics and a risk clamp
+    -- where a divergence puts a capacity on the projector that the API
+    disagrees with, mid-class, with nothing raised anywhere.
+    """
+    for name in ("state.js", "render.js", "graph.js", "index.html"):
+        code = COMMENT.sub(" ", assets[name])
+        for kind in DISRUPTION_KINDS:
+            assert kind not in code, (
+                f"{name}: names the disruption kind `{kind}`. The frontend "
+                f"never branches on HOW a lane was disrupted -- it reads the "
+                f"post-disruption capacity the server already computed."
+            )
+        # `factor` is the multiplier a scaled lane would be recomputed with.
+        assert not re.search(r"\.factor\b", code), (
+            f"{name}: reads a disruption's `factor`, which is the multiplier a "
+            f"client-side recomputation would need and a reader needs for "
+            f"nothing else"
+        )
+    # And the reading itself is in one place, so there is one lookup rather than
+    # one per consumer.
+    state = COMMENT.sub(" ", assets["state.js"])
+    assert "export function edgeChanges" in state, (
+        "state.js exports no `edgeChanges`. The post-disruption state of every "
+        "lane is one lookup into what the server computed, so that every lane "
+        "in one render pass is judged against the same map."
+    )
+
+
+def test_the_instructor_written_note_is_displayed(assets, stylesheet):
+    """The caption that was authored into every scenario file and never drawn.
+
+    `note` is instructor-written narration -- "Forward port struck; its 60 units
+    of stock are lost to the plan" -- and on a projector it is the sentence the
+    room reads while the numbers move under it. Nothing in the repo has ever
+    rendered it.
+    """
+    page = COMMENT.sub(" ", assets["index.html"])
+    assert 'id="threat-note"' in page, (
+        "index.html has no threat-note slot. The picture's caption is a fixed "
+        "slot like every other, built once and written by textContent."
+    )
+    graph = COMMENT.sub(" ", assets["graph.js"])
+    assert "threat-note" in graph, (
+        "graph.js takes no handle on the threat-note slot; the render pass "
+        "never appends, so the element has to be reached through the handle map"
+    )
+    render = COMMENT.sub(" ", assets["render.js"])
+    assert "disruptions" in render, (
+        "render.js never reads a picture's `disruptions`, which is where the "
+        "instructor-written notes are -- the computed `changes` block carries "
+        "the numbers and no narration at all"
+    )
+    assert "#threat-note" in stylesheet, (
+        "style.css paints no `#threat-note`; the caption would inherit whatever "
+        "the panel's body type happens to be"
+    )
+
+
+def test_a_removed_lane_is_struck_out_rather_than_deleted(assets, stylesheet):
+    """The room sees what was taken away, not a gap where it used to be.
+
+    A lane that vanishes teaches less than a lane visibly struck out -- and the
+    DOM is built once per dataset, so a threat picture has no way to delete one
+    even if it wanted to.
+    """
+    rule = re.search(r"#ledger tr\.removed td\s*\{([^}]*)\}", stylesheet)
+    assert rule, "style.css has no `#ledger tr.removed td` rule"
+    assert "line-through" in rule.group(1), (
+        "a removed lane's ledger row is not struck through, so a lane the "
+        "server has zeroed reads as one that merely lost its emphasis"
+    )
+    assert "muted" in rule.group(1), (
+        "a removed lane's row is not greyed; struck AND greyed is the "
+        "vocabulary, and half of it reads as a lane still in play"
+    )
+    # Nothing anywhere takes an element out of the tree after the build pass.
+    for name in ("render.js", "index.html"):
+        code = COMMENT.sub(" ", assets[name])
+        for removal in (r"\.remove\(\)", r"removeChild"):
+            assert not re.search(removal, code), (
+                f"{name}: removes an element from the tree. Removal is a style "
+                f"and never a deletion -- the lane keeps its element and gains "
+                f"a class."
+            )
+
+
+def test_supply_figures_are_qualified_under_a_threat_picture(assets, stylesheet):
+    """A severed hub still reports its stock, and the panel must not let that lie.
+
+    Removing a node zeroes its incident lanes and leaves its quantity alone, so
+    the network still reports full total supply beside a visibly severed hub --
+    which invites exactly the wrong question at the moment the instructor is
+    making the opposite point. Resolved in the PANEL rather than by mutating the
+    numbers: the total stays the server's.
+    """
+    state = COMMENT.sub(" ", assets["state.js"])
+    assert "export function severedNodes" in state, (
+        "state.js exports no `severedNodes`. Which hubs a picture has cut off "
+        "is read out of the server's `changes` block -- a node all of whose "
+        "lanes are removed -- not worked out from the disruption declarations."
+    )
+    body = re.search(r"export function severedNodes\b.*?\n\}", state, re.DOTALL)
+    assert "isRemoved" in body.group(0), (
+        "`severedNodes` does not decide removal through `isRemoved`, so a "
+        "severed hub and a struck lane would be answering the same question "
+        "two ways"
+    )
+    # No arithmetic on the quantities. The total is the server's number and
+    # stays the server's number; what the panel adds is a count of hubs, which
+    # is certified by the struck nodes on the canvas.
+    render = COMMENT.sub(" ", assets["render.js"])
+    assert "total_supply" in render, "render.js no longer writes the supply slot"
+    assert not re.search(r"total_supply\s*[-+]", render), (
+        "render.js adjusts `total_supply` itself. The figure is the server's "
+        "and stays the server's -- the panel qualifies it rather than mutating "
+        "it, or the number on the projector stops matching the API's."
+    )
+    assert "severed" in render, (
+        "nothing marks the severed hubs in the render pass, so the supply "
+        "figure would sit unqualified beside a hub with no lanes left"
+    )
+    assert ".node.severed" in stylesheet, (
+        "style.css paints no `.node.severed`; a hub cut off by a threat "
+        "picture would look exactly like one still feeding the theater"
+    )

@@ -76,7 +76,14 @@ const FALLBACK = { x0: 60, dx: 200, y0: 90, dy: 130 };
  * which is cheaper to read past than a dashboard that reshapes itself.
  */
 const HEADLINE_SLOTS = [
-  { id: "supply",      label: "Supply" },
+  /* `qualifier` is a second line under the number, and this is the one slot
+   * that has it. Total supply is a fact about the authored network and stays
+   * one under every threat picture -- removing a node zeroes its lanes and
+   * leaves its stock alone -- so on the beat a hub is severed this figure is
+   * simultaneously correct and misleading. The panel says which hubs stopped
+   * contributing instead of adjusting the total, because a total the frontend
+   * adjusted is a number the API no longer agrees with. */
+  { id: "supply",      label: "Supply", qualifier: true },
   { id: "demand",      label: "Demand" },
   { id: "throughput",  label: "Flow" },
   /* The augmenting path's bottleneck -- the number beat *a* is asking the room
@@ -168,10 +175,14 @@ export const handles = {
   terminals: new Map(),
   /** slotId -> the `<span>` holding that headline number. */
   headline: new Map(),
+  /** slotId -> the `<span>` under it, for the slots that declare one. */
+  qualifiers: new Map(),
   /** The A/B pair's three cells, `{root, label, before, after}`. */
   delta: null,
   /** The headline's one-sentence note. See `buildHeadline`. */
   note: null,
+  /** The active threat picture's caption. See `buildHeadline`. */
+  threat: null,
   /** The beat timeline's rows, in spine order. See `buildTimeline`. */
   timeline: [],
   /** The Pareto table's rows, in lambda order. See `buildPareto`. */
@@ -184,6 +195,7 @@ export const frozen = {
   anchors: new Map(),      /* edgeId -> {x, y} */
   crossings: [],           /* {point, angle, lanes: [edgeId, edgeId]} */
   directed: new Map(),     /* "src>dst" -> {edgeId, stored, against} */
+  incident: new Map(),     /* nodeId -> [edgeId, ...] of the lanes touching it */
   terminalLinks: [],       /* {nodeId, role} for each derived S/T arc */
 };
 
@@ -293,6 +305,32 @@ function directedLookup(edges) {
     if (edge.bidirectional) {
       map.set(`${edge.dst}>${edge.src}`,
               { edgeId: edge.id, stored: false, against: false });
+    }
+  }
+  return map;
+}
+
+/**
+ * Which stored lanes touch each node, `nodeId -> [edgeId, ...]`.
+ *
+ * Structure, so it is solved once here with the crossings and the anchors
+ * rather than rebuilt inside a render pass. It is frozen for the same reason
+ * they are: the lanes touching a node are a fact about the authored file, and
+ * no threat picture, beat or view moves them -- a picture zeroes a lane's
+ * capacity, which is a fact about the lane's numbers and not about the shape of
+ * the graph.
+ *
+ * Its one consumer is `severedNodes`, which asks whether every lane touching a
+ * node has been removed. A node with no lanes at all never enters the map,
+ * which is right: it was already isolated in the pristine network, so nothing
+ * was taken from it.
+ */
+function incidenceLookup(edges) {
+  const map = new Map();
+  for (const edge of edges) {
+    for (const nodeId of [edge.src, edge.dst]) {
+      if (!map.has(nodeId)) map.set(nodeId, []);
+      map.get(nodeId).push(edge.id);
     }
   }
   return map;
@@ -534,11 +572,23 @@ function buildHeadline() {
   clearChildren(stats);
   handles.headline.clear();
 
+  handles.qualifiers.clear();
+
   for (const slot of HEADLINE_SLOTS) {
     const cell = el("div", slot.wide ? "stat wide" : "stat");
     cell.appendChild(el("span", "stat-label", slot.label));
     const value = el("span", "stat-value", "—");
     cell.appendChild(value);
+    /* A third line in the cell, for the one slot whose number can be true and
+     * misleading at the same time. It is a line rather than a suffix on the
+     * value so that the figure itself keeps the shape and the position the
+     * whole fixed grid promises -- the qualifier appears under it and the
+     * columns do not move. */
+    if (slot.qualifier) {
+      const qualifier = el("span", "stat-qualifier");
+      cell.appendChild(qualifier);
+      handles.qualifiers.set(slot.id, qualifier);
+    }
     stats.appendChild(cell);
     handles.headline.set(slot.id, value);
   }
@@ -564,6 +614,19 @@ function buildHeadline() {
   const note = document.getElementById("headline-note");
   clearChildren(note);
   handles.note = note;
+
+  /* The threat picture's caption, and a slot of its own beside the sentence
+   * above rather than sharing it.
+   *
+   * The two say different kinds of thing and are both true at once on the one
+   * combination that matters: the textbook set in Cost & Risk has a degenerate
+   * frontier to declare AND no threat picture to cycle, and a shared slot would
+   * make pressing `T` there overwrite the standing explanation of why Day 1 is
+   * flat. This one carries the instructor's OWN words -- the `note` authored
+   * into each disruption -- so it is panel ink rather than muted aside. */
+  const threat = document.getElementById("threat-note");
+  clearChildren(threat);
+  handles.threat = threat;
 }
 
 /**
@@ -607,6 +670,7 @@ export function buildGraph(svg, payload) {
   frozen.crossings = crossingSolve(network.edges, positions);
   frozen.anchors = anchorSolve(network.edges, positions, frozen.crossings);
   frozen.directed = directedLookup(network.edges);
+  frozen.incident = incidenceLookup(network.edges);
   frozen.terminalLinks = terminalLinks(network.nodes);
 
   const xs = [...positions.values()].map((point) => point.x);

@@ -93,6 +93,15 @@
           assignments were designed to avoid.
         -->
         <p id="headline-note"></p>
+        <!--
+          The active threat picture's caption: its name, and the instructor's
+          own note on each disruption it applies. A slot of its own rather than
+          a share of the sentence above, because both can be true at once -- the
+          textbook set in Cost & Risk has a flat frontier to declare AND no
+          threat picture to cycle -- and because these are the instructor's
+          words rather than the page's.
+        -->
+        <p id="threat-note"></p>
       </div>
 
       <h2>Dataset</h2>
@@ -174,16 +183,36 @@
   <script type="module">
     import { fetchDatasets, fetchScenario, fetchMaxflow,
              fetchLadder, fetchSweep, fetchNaive } from "./api.js";
-    import { state, setScenario, setDataset, setView, toggleLayer, pinLane,
-             stepBeat, stepUnit, jumpToUnit, resetView, setBeat, setSpine,
-             flowCutSpine, interdictionSpine, costRiskSpine, paretoRows,
-             spine, resolveBeat } from "./state.js";
+    import { state, setScenario, setDataset, setDatasets, setView, toggleLayer,
+             pinLane, stepBeat, stepUnit, jumpToUnit, resetView, setBeat,
+             setSpine, flowCutSpine, interdictionSpine, costRiskSpine,
+             paretoRows, spine, resolveBeat, threatNames, cycleThreat,
+             nextDataset, stashThreat, restoreThreat } from "./state.js";
     import { buildGraph, buildTimeline, buildPareto, laneForArc } from "./graph.js";
     import { render } from "./render.js";
     import { VIEWS, LAYERS, applyLayerClasses, viewForKey,
              showsTimeline } from "./views.js";
 
     const svg = document.getElementById("theater");
+    const select = document.getElementById("dataset-select");
+
+    // The key the baseline's payloads are filed under. A map key rather than
+    // `null` so that the pristine network and the pictures are looked up the
+    // same way, with no branch deciding which store to reach into.
+    const BASELINE = "";
+
+    // Every threat state's four payloads, keyed by picture name.
+    //
+    // PREFETCHED WITH THE DATASET, all of them, because `T` is a keypress and
+    // the rule this whole application is built on is that anything a keypress
+    // can reach is fetched before the first keypress. A `T` that fetched would
+    // be a request that can fail while the room watches, and the spine it
+    // installs would arrive after the key that asked for it. The cost is
+    // (pictures + 1) x 4 requests on a dataset switch, paid once, off the
+    // classroom's critical path -- against a request in the middle of a
+    // sentence, paid every time the instructor makes the comparison the key
+    // exists for.
+    let payloads = new Map();
 
     // The rows a slot shows for a view that does not own it, as ONE array
     // rather than a fresh `[]` each pass. The identity checks below are what
@@ -350,7 +379,14 @@
       PageUp:     () => stepBeat(-1),
       ArrowDown:  () => stepUnit(1),
       ArrowUp:    () => stepUnit(-1),
-      KeyR:       () => resetView(),
+      KeyR:       () => resetToBaseline(),
+      // The two cycling axes, both of which PRESERVE THE BEAT INDEX -- park on
+      // a detent, cycle the picture, and watch the same plan buckle. `T` is
+      // synchronous because every picture's payloads were prefetched with the
+      // dataset; `D` is the one key that awaits, and it is also the one
+      // structural rebuild the architecture allows.
+      KeyT:       () => { cycleThreat() && applyThreat(); },
+      KeyD:       () => { cycleDataset(); },
     };
 
     const DIGIT = /^Digit([1-9])$/;
@@ -391,12 +427,116 @@
       }
     }
 
+    /* Install the three spines built from the active picture's payloads.
+     *
+     * ONE function, called by the dataset load and by `T` alike, so the picture
+     * the keyboard reaches and the one the first paint shows cannot be built
+     * differently. Synchronous by construction: the payloads are already in
+     * hand, and every spine builder is pure.
+     *
+     * **The topology pass does not run here, and must not.** The diagram is
+     * built once per dataset, so a threat picture only ever changes classes and
+     * text on the lanes and nodes that already exist -- rebuilding them would
+     * throw away every handle the render pass reaches a lane through, and the
+     * two would only be seen to disagree once some state was set, which is to
+     * say in front of a room.
+     *
+     * ONE structural change does follow, and it is accepted rather than
+     * overlooked: `repaint` rebuilds the beat timeline's rows, because the
+     * spines installed here are new arrays. That is not the topology pass and
+     * it is not avoidable -- a picture genuinely changes how long the story is
+     * (the theater's ladder is three rungs pristine and two under
+     * `strait_mined`), so rows have to appear or go. It is exactly the same
+     * reason `setSpine` clamps the beat index rather than trusting it, and the
+     * rows are the one thing on the page whose count is allowed to move. The
+     * identity guard in `repaint` is what keeps it to spine changes alone,
+     * rather than every keypress.
+     */
+    function applyThreat() {
+      const built = payloads.get(state.threat || BASELINE);
+      // A picture with no payloads is a dataset switch that has not finished.
+      // Leaving the spines standing is the safe half: they are the last
+      // complete set, rather than a half-installed ladder.
+      if (!built) return;
+      setSpine("flow-cut", flowCutSpine(built.maxflow, laneForArc));
+      setSpine("interdiction",
+               interdictionSpine(built.ladder, built.maxflow, laneForArc));
+      setSpine("cost-risk", costRiskSpine(built.sweep, built.naive, laneForArc,
+                                          state.scenario.network));
+      // Rebuilt with the spine it was built beside: the frontier is a fact
+      // about the dataset UNDER A PICTURE, and a mined strait moves it.
+      frontier = paretoRows(built.sweep, built.naive);
+    }
+
+    /* `R`: the full reset, finished.
+     *
+     * `resetView` clears the threat picture along with the beat and the hand
+     * toggles, which leaves the spines on screen built from the picture it just
+     * dropped -- a panel captioned pristine over a disrupted ladder. Re-applying
+     * is the other half of the reset, and it is a NAMED function rather than two
+     * calls inline so that there is one spelling of "reset" for any later
+     * control to reach for. `resetView` alone is never the whole act.
+     */
+    function resetToBaseline() {
+      resetView();
+      applyThreat();
+    }
+
+    /* `D`: the next dataset, carrying what the target can express.
+     *
+     * Through the same `load` the first paint uses, rather than a second build
+     * path that can drift from it. The beat index carries across and is clamped
+     * by `setSpine`; the picture is stashed on the way out and restored on the
+     * way back in, so the Day 2 excursion comes home to what it left.
+     */
+    async function cycleDataset() {
+      const next = nextDataset();
+      // One dataset is not a cycle. Silent rather than labelled, unlike `T`:
+      // the menu beside the key is showing its own single entry, so the reason
+      // is already on screen where the instructor is looking.
+      if (next === null) return;
+      await switchDataset(next);
+    }
+
+    /* Leave the current dataset for another, remembering the picture.
+     *
+     * THE ONE ROUTE, shared by the `D` key and the menu, because they are the
+     * same act and a second spelling of it is one that can drift -- a menu
+     * change that forgot the stash would silently lose the picture the key
+     * would have remembered.
+     *
+     * Guarded against re-entry, which matters for exactly this key: `D` is
+     * designed to be pressed twice in quick succession -- that is how the
+     * instructor comes home at two datasets -- and `load` is a long await that
+     * rebuilds the diagram and replaces the payload store. Two of them
+     * interleaved would build one dataset's DOM against another's payloads. A
+     * dropped press is recoverable in a way that is not.
+     */
+    let switching = false;
+
+    async function switchDataset(datasetId) {
+      if (switching) return;
+      switching = true;
+      try {
+        stashThreat();
+        await load(datasetId);
+        // The menu follows the state, like every other control on this page.
+        select.value = datasetId;
+      } finally {
+        switching = false;
+      }
+    }
+
     async function load(datasetId) {
       const payload = await fetchScenario(datasetId);
       // Recorded here rather than only in the select's change handler, so the
       // field is true after the first load as well as after a switch.
       setDataset(datasetId);
       setScenario(payload);
+      // Before anything is fetched with it: the picture is a parameter of all
+      // four solver requests below, so restoring it afterwards would leave the
+      // pristine network's spines under a panel captioned with a threat.
+      restoreThreat();
       // The DOM is rebuilt exactly once per dataset, and never again for that
       // dataset. Every later state change is a render pass over elements that
       // already exist.
@@ -416,7 +556,7 @@
       // for three presses.
       //
       // Both spines' payloads are asked for together and awaited together. The
-      // ladder is one request per dataset for the same reason the trace is:
+      // ladder is one request per threat state for the same reason the trace is:
       // Day 4 is walked up and back down at the front of the room, and the
       // alternative is the 2 x K requests a per-rung frontend would issue.
       //
@@ -425,33 +565,30 @@
       // and the optimum is a swap at one index, and BOTH sides are in hand
       // before the dial can be turned. Fetching them per detent would put a
       // request between the instructor and the next keypress eight times over.
-      const [maxflow, ladder, sweep, naive] = await Promise.all([
-        fetchMaxflow(datasetId, state.threat),
-        fetchLadder(datasetId, state.threat),
-        fetchSweep(datasetId, state.threat),
-        fetchNaive(datasetId, state.threat),
-      ]);
-      // The lane lookup is handed in rather than imported by state.js, which
-      // keeps the module that owns app state free of the one that owns
-      // elements.
-      setSpine("flow-cut", flowCutSpine(maxflow, laneForArc));
-      // Two payloads, because Day 4 draws Day 3's certificate underneath its
-      // own wreckage: the ladder says which lanes the adversary takes and
-      // `/maxflow` says which lanes certify the cut it is working against.
-      setSpine("interdiction", interdictionSpine(ladder, maxflow, laneForArc));
-      // The pristine network goes in because the spine has exactly one question
-      // for it: whether this dataset carries any risk at all. On the textbook
-      // set it does not, and the headline says so rather than the combination
-      // being struck -- a degenerate combination is labelled.
-      setSpine("cost-risk",
-               costRiskSpine(sweep, naive, laneForArc, payload.network));
-      // The panel's rows come from the SAME `paretoRows` the spine was built
-      // from -- one pure function, called for each, so the eight rows the panel
-      // shows and the detents the keyboard walks cannot disagree about which
-      // block a lambda belongs to. The rows go on screen in `repaint`, which is
-      // where the view decides whether this slot or the beat timeline is the
-      // one carrying its beat state.
-      frontier = paretoRows(sweep, naive);
+      //
+      // And EVERY THREAT PICTURE'S SET, not only the active one, for the same
+      // reason and one level up: `T` is a keypress too. The four requests are
+      // issued once per threat state, all of them in flight together, and
+      // nothing on the keyboard awaits anything afterwards.
+      payloads = new Map();
+      await Promise.all([null, ...threatNames()].map(async (name) => {
+        const [maxflow, ladder, sweep, naive] = await Promise.all([
+          fetchMaxflow(datasetId, name),
+          fetchLadder(datasetId, name),
+          fetchSweep(datasetId, name),
+          fetchNaive(datasetId, name),
+        ]);
+        // Two payloads under `maxflow` and `ladder`, because Day 4 draws Day
+        // 3's certificate underneath its own wreckage: the ladder says which
+        // lanes the adversary takes and `/maxflow` says which lanes certify the
+        // cut it is working against.
+        payloads.set(name || BASELINE, { maxflow, ladder, sweep, naive });
+      }));
+
+      // The spines, and the Pareto rows beside them. The lane lookup is handed
+      // in rather than imported by state.js, which keeps the module that owns
+      // app state free of the one that owns elements.
+      applyThreat();
 
       // The beat is re-resolved against the new dataset rather than reset: the
       // marks were cleared with the old theater's edge ids, and the current
@@ -461,15 +598,19 @@
     }
 
     async function boot() {
-      const select = document.getElementById("dataset-select");
       const datasets = await fetchDatasets();
+      // The cycle order is the server's -- default first, then alphabetical --
+      // so `D` opens on the default and moves away from it.
+      setDatasets(datasets.map((dataset) => dataset.id));
       for (const dataset of datasets) {
         const option = document.createElement("option");
         option.value = dataset.id;
         option.textContent = dataset.name;
         select.appendChild(option);
       }
-      select.addEventListener("change", () => load(select.value));
+      // Pointer parity with `D`, through the same function: the menu is not a
+      // second route to a dataset switch, it is the same one named differently.
+      select.addEventListener("change", () => switchDataset(select.value));
 
       buildControls();
       bindLedger();

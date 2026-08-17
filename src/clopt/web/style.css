@@ -425,6 +425,19 @@ html, body {
   line-height: 1.1;
 }
 
+/* The second line under a stat, for the one figure that can be correct and
+ * misleading at the same time: total supply, beside a hub whose lanes a threat
+ * picture has all zeroed. Set at label size and in the muted ink, because it
+ * qualifies the number rather than competing with it -- and it collapses when
+ * empty, since an absent qualifier has nothing to hold a place for. */
+.stat-qualifier {
+  font-size: var(--panel-type-label);
+  color: var(--panel-muted);
+  line-height: 1.2;
+}
+
+.stat-qualifier:empty { display: none; }
+
 /* The one A/B pair. It keeps its line whether or not it is saying anything --
  * hiding it would move everything below it on the beat it appears, which is
  * the reflow the ledger is at such pains to avoid. */
@@ -457,6 +470,22 @@ html, body {
 }
 
 #headline-note:empty { display: none; }
+
+/* The threat picture's caption -- its name and the instructor's own note on
+ * each disruption. Panel INK rather than the muted italic above it, and that is
+ * the distinction being drawn: the sentence above is the page explaining
+ * itself, where this is the instructor's own narration, authored into the
+ * scenario file and read out loud while the numbers move underneath.
+ *
+ * Collapses when empty for the same reason: on the pristine network there is no
+ * picture and therefore nothing to caption. */
+#threat-note {
+  margin: 2px 0 0;
+  font-size: var(--panel-type-label);
+  color: var(--panel-ink);
+}
+
+#threat-note:empty { display: none; }
 
 /* ---- the lane ledger ----------------------------------------------------- */
 /* `table-layout: fixed` is load-bearing, not tidiness. An auto-laid-out table
@@ -796,6 +825,28 @@ html, body {
 /* A transit node carries no stock, so its quantity line is suppressed rather
  * than drawn as a zero the class would have to explain. */
 .node.transit .node-quantity { display: none; }
+
+/* ---- the severed hub -------------------------------------------------------
+ * A node every one of whose lanes the active threat picture has zeroed. It
+ * exists because REMOVING A NODE LEAVES ITS QUANTITY INTACT: the hub goes on
+ * reporting its stock and the panel goes on reporting full total supply, so
+ * without a mark here the room sees a healthy 60 sitting on a hub with nothing
+ * left to carry it -- and asks the question the instructor is arguing against.
+ *
+ * It wears the same grey-and-struck vocabulary a removed lane and an
+ * unreachable base already wear, because on screen it is the same fact: this is
+ * absent, not alarming. No new hue and no new glyph -- the node's categorical
+ * fill still says what KIND of node it is, dimmed to say it is out of the game.
+ *
+ * The quantity is struck through rather than blanked. A blank reads as a hub
+ * that never held anything, where the point is the opposite: it held sixty and
+ * they are stranded. */
+.node.severed .node-disc { opacity: var(--removed-op); }
+
+.node.severed .node-quantity {
+  fill: var(--removed);
+  text-decoration: line-through;
+}
 
 /* ---- annotation tier ----------------------------------------------------- */
 /* Anchors and casings exist in the DOM from the first paint and show nothing
